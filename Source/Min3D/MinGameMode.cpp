@@ -217,8 +217,7 @@ void AMinGameMode::Tick(float DeltaSeconds)
 	{
 		++ShotsTaken;
 		NextShotAt = RunTime + 12.f;
-		if (APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0))
-			PC->ConsoleCommand(TEXT("Shot showui"));
+		FScreenshotRequest::RequestScreenshot(true /*show UI*/);
 	}
 
 	// scripted view changes for headless verification
@@ -244,7 +243,6 @@ void AMinGameMode::Tick(float DeltaSeconds)
 	}
 	if (AutoQuitAt > 0.f && RunTime >= AutoQuitAt)
 	{
-		if (APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0))
-			PC->ConsoleCommand(TEXT("quit"));
+		FPlatformMisc::RequestExit(false);
 	}
 }
