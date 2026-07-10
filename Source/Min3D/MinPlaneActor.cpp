@@ -487,10 +487,34 @@ void AMinPlaneActor::ShowPreview(const TArray<FIntPoint>& Cells, bool bValid, EM
 	}
 	FMeshAccum M;
 	const FColor Col = bValid ? FColor(90, 210, 120, 150) : FColor(230, 70, 60, 150);
+	const FColor Edge = bValid ? FColor(150, 245, 175, 230) : FColor(255, 120, 105, 230);
 	TArray<FVector> Pts;
 	for (const FIntPoint& C : Cells) Pts.Add(CellPt(FIntVector(C.X, C.Y, 0)));
-	if (Pts.Num() == 1) M.Disc(Pts[0], 30.f, Col);
-	else M.Polyline(Pts, Type == EMinRoute::Pipe ? 18.f : 24.f, Col);
+
+	// grid-aligned cell highlight so the snap-to-cell is obvious: soft fill
+	// plus a brighter outline hugging the hovered cell
+	auto CellHighlight = [&](const FVector& Center)
+	{
+		const float H = Min::CellSize * 0.5f - 2.f;
+		const float B = 5.f; // outline thickness
+		M.Quad(Center + FVector(-H, 0, -H), Center + FVector(H, 0, -H),
+			Center + FVector(H, 0, H), Center + FVector(-H, 0, H), Col);
+		M.Quad(Center + FVector(-H, 0, H - B), Center + FVector(H, 0, H - B),
+			Center + FVector(H, 0, H), Center + FVector(-H, 0, H), Edge);
+		M.Quad(Center + FVector(-H, 0, -H), Center + FVector(H, 0, -H),
+			Center + FVector(H, 0, -H + B), Center + FVector(-H, 0, -H + B), Edge);
+		M.Quad(Center + FVector(-H, 0, -H), Center + FVector(-H + B, 0, -H),
+			Center + FVector(-H + B, 0, H), Center + FVector(-H, 0, H), Edge);
+		M.Quad(Center + FVector(H - B, 0, -H), Center + FVector(H, 0, -H),
+			Center + FVector(H, 0, H), Center + FVector(H - B, 0, H), Edge);
+	};
+
+	if (Pts.Num() == 1) CellHighlight(Pts[0]);
+	else
+	{
+		M.Polyline(Pts, Type == EMinRoute::Pipe ? 18.f : 24.f, Col);
+		CellHighlight(Pts.Last()); // the cell under the cursor while dragging
+	}
 	GhostRouteMesh->CreateMeshSection(0, M.V, M.T, M.N, M.UV, M.C, TArray<FProcMeshTangent>(), false);
 	GhostRouteMesh->SetVisibility(true);
 }

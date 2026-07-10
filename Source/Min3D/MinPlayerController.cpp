@@ -246,10 +246,14 @@ bool AMinPlayerController::GetMouseCell(FIntPoint& OutCell) const
 	if (!P || P->bMatrixView) return false;
 	float MX, MY;
 	if (!GetMousePosition(MX, MY)) return false;
+
+	// analytic orthographic mapping over the viewport. Engine deprojection is
+	// NOT used here: with this ortho setup it returns aspect-scaled results
+	// that disagree with what is actually rendered, while this mapping was
+	// verified pixel-exact against rendered geometry via synthetic drags.
 	int32 VX, VY;
 	GetViewportSize(VX, VY);
 	if (VX <= 0 || VY <= 0) return false;
-	// exact orthographic mapping: screen -> world XZ on the active plane
 	const float WorldX = P->PanCenter.X + (MX / VX - 0.5f) * P->OrthoWidth;
 	const float WorldZ = P->PanCenter.Y - (MY / VY - 0.5f) * P->OrthoWidth * (float(VY) / VX);
 	OutCell = Min::WorldToCell(FVector(WorldX, 0.f, WorldZ));

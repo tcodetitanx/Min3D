@@ -66,6 +66,25 @@ void AMinGameMode::BeginPlay()
 	}
 	UpdatePlaneVisibility();
 
+	// soft backdrop behind all planes so the void beyond the world reads as
+	// deep earth instead of black nothing
+	{
+		AActor* Backdrop = GetWorld()->SpawnActor<AActor>();
+		USceneComponent* Root = NewObject<USceneComponent>(Backdrop);
+		Backdrop->SetRootComponent(Root);
+		Root->RegisterComponent();
+		UStaticMeshComponent* Quad = NewObject<UStaticMeshComponent>(Backdrop);
+		Quad->SetStaticMesh(Assets->GetQuad());
+		Quad->SetMaterial(0, Assets->MakeTexMID(Quad, nullptr, FLinearColor(0.055f, 0.048f, 0.058f)));
+		Quad->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		Quad->SetCastShadow(false);
+		Quad->SetTranslucentSortPriority(-2);
+		Quad->RegisterComponent();
+		Quad->SetWorldLocation(FVector(Min::NX * Min::CellSize * 0.5f, -2.f * Min::PlaneGap,
+			-Min::NY * Min::CellSize * 0.5f));
+		Quad->SetWorldScale3D(FVector(1200.f, 1.f, 800.f));
+	}
+
 	Audio->EnsurePlaying(GetWorld());
 
 	float V;
