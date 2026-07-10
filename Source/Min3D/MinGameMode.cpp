@@ -8,9 +8,11 @@
 #include "MinPawn.h"
 #include "MinPlayerController.h"
 #include "MinGameInstance.h"
+#include "Components/StaticMeshComponent.h"
 #include "Kismet/GameplayStatics.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
+#include "UnrealClient.h"
 
 AMinGameMode::AMinGameMode()
 {
@@ -46,9 +48,12 @@ void AMinGameMode::BeginPlay()
 		if (Audio) Audio->Play(EMinSfx::Chime);
 	});
 
+	Sim->EnsureBase();
+
+	bool bLoadedSave = false;
 	if ((GI && GI->bRequestLoadSave) || FParse::Param(FCommandLine::Get(), TEXT("MinLoad")))
 	{
-		if (UMinSim::SaveExists()) Sim->LoadGame();
+		if (UMinSim::SaveExists()) bLoadedSave = Sim->LoadGame();
 		if (GI) GI->bRequestLoadSave = false;
 	}
 
@@ -74,7 +79,11 @@ void AMinGameMode::BeginPlay()
 	}
 	float Fast;
 	if (FParse::Value(FCommandLine::Get(), TEXT("MinFast="), Fast)) Sim->SimSpeed = Fast;
-	if (FParse::Param(FCommandLine::Get(), TEXT("MinAutoBuild"))) RunAutoBuild();
+	const bool bAutoBuild = FParse::Param(FCommandLine::Get(), TEXT("MinAutoBuild"));
+	if (bAutoBuild) RunAutoBuild();
+
+	if (!bLoadedSave && !bAutoBuild && !FParse::Param(FCommandLine::Get(), TEXT("MinNoTutorial")))
+		SetTutStep(0);
 
 	UE_LOG(LogMin, Log, TEXT("Min3D up: %dx%dx%d cells, %d deposits, %d credits"),
 		Min::NX, Min::NY, Min::NP, MinWorld->Deposits.Num(), Sim->Credits);
@@ -108,53 +117,210 @@ void AMinGameMode::UpdatePlaneVisibility()
 
 void AMinGameMode::RunAutoBuild()
 {
-	// headless smoke test: assemble a full iron chain on the starting plane
+	// headless smoke test: mine iron and route it up to the surface Base
 	const int32 P = Min::CurrentPlane;
+	const FIntVector BC = Sim->BaseCell();
+	Sim->Credits += 400; // headless test ignores early-game economy
 	for (const FMinDeposit& D : MinWorld->Deposits)
 	{
 		if (D.Plane != P || D.Resource != EMinResource::Iron) continue;
-		// try a spot to the side for the depot
-		for (int32 DX : { -9, 9, -13, 13 })
+
+		// BFS through diggable/open cells from the deposit to the base
+		TMap<FIntPoint, FIntPoint> Came;
+		TArray<FIntPoint> Queue;
+		int32 Head = 0;
+		Queue.Add(D.Center);
+		Came.Add(D.Center, D.Center);
+		const FIntPoint Goal(BC.X, BC.Y);
+		bool bFound = false;
+		while (Head < Queue.Num())
 		{
-			const FIntPoint DepotCell(D.Center.X + DX, D.Center.Y);
-			const FIntPoint MinerCell = D.Center;
-			// L-shaped corridor
-			TArray<FIntPoint> Path;
-			const int32 Step = DX > 0 ? 1 : -1;
-			for (int32 X = MinerCell.X; X != DepotCell.X + Step; X += Step)
-				Path.Add(FIntPoint(X, MinerCell.Y));
-			if (!Sim->CheckStructure(EMinStructure::Miner, MinerCell, P).bValid) continue;
-			if (!Sim->BuildStructure(EMinStructure::Miner, MinerCell, P)) continue;
-			if (!Sim->CheckStructure(EMinStructure::Depot, DepotCell, P).bValid) continue;
-			Sim->BuildStructure(EMinStructure::Depot, DepotCell, P);
-			const FMinBuildCheck RC = Sim->CheckRoute(Path, P, EMinRoute::Tunnel);
-			if (!RC.bValid) { UE_LOG(LogMin, Warning, TEXT("AutoBuild route invalid: %s"), *RC.Reason); continue; }
-			Sim->BuildRoute(Path, P, EMinRoute::Tunnel);
-			// smelter on a spur halfway along the line + generator near the depot
-			const FIntPoint SmelterCell(MinerCell.X + DX / 2, MinerCell.Y);
-			const FIntPoint SmelterSpot(SmelterCell.X, SmelterCell.Y + 2);
-			if (Sim->CheckStructure(EMinStructure::Smelter, SmelterSpot, P).bValid)
+			const FIntPoint C = Queue[Head++];
+			if (C == Goal) { bFound = true; break; }
+			const FIntPoint Dirs[4] = { {1, 0}, {-1, 0}, {0, 1}, {0, -1} };
+			for (const FIntPoint& Dir : Dirs)
+			{
+				const FIntPoint N = C + Dir;
+				if (!Min::InGrid(N.X, N.Y, P) || Came.Contains(N)) continue;
+				const FMinCell& Cell = MinWorld->Cell(N.X, N.Y, P);
+				if (Cell.Terrain == EMinTerrain::Sky || Cell.Terrain == EMinTerrain::Granite) continue;
+				if (Cell.Terrain == EMinTerrain::Aquifer && !Cell.bExcavated) continue;
+				if (Cell.StructureId >= 0 && N != Goal) continue;
+				Came.Add(N, C);
+				Queue.Add(N);
+			}
+		}
+		if (!bFound) continue;
+		TArray<FIntPoint> Path;
+		for (FIntPoint C = Goal; ; C = Came[C])
+		{
+			Path.Insert(C, 0);
+			if (C == D.Center) break;
+		}
+		if (!Sim->CheckStructure(EMinStructure::Miner, D.Center, P).bValid) continue;
+		const FMinBuildCheck RC = Sim->CheckRoute(Path, P, EMinRoute::Tunnel);
+		if (!RC.bValid) { UE_LOG(LogMin, Warning, TEXT("AutoBuild route: %s"), *RC.Reason); continue; }
+		Sim->BuildStructure(EMinStructure::Miner, D.Center, P);
+		Sim->BuildRoute(Path, P, EMinRoute::Tunnel);
+
+		// smelter on a short spur anchored halfway along the route
+		const FIntPoint Anchor = Path[Path.Num() / 2];
+		const FIntPoint SpurDirs[4] = { {0, 1}, {0, -1}, {1, 0}, {-1, 0} };
+		for (const FIntPoint& Dir : SpurDirs)
+		{
+			const FIntPoint SmelterSpot = Anchor + Dir * 2;
+			TArray<FIntPoint> Spur = { Anchor, Anchor + Dir, SmelterSpot };
+			if (Sim->CheckStructure(EMinStructure::Smelter, SmelterSpot, P).bValid
+				&& Sim->CheckRoute(Spur, P, EMinRoute::Tunnel).bValid)
 			{
 				Sim->BuildStructure(EMinStructure::Smelter, SmelterSpot, P);
-				TArray<FIntPoint> Spur = { FIntPoint(SmelterCell.X, SmelterCell.Y),
-					FIntPoint(SmelterCell.X, SmelterCell.Y + 1), SmelterSpot };
 				Sim->BuildRoute(Spur, P, EMinRoute::Tunnel);
+				break;
 			}
-			const FIntPoint GenSpot(DepotCell.X, DepotCell.Y + 2);
-			if (Sim->CheckStructure(EMinStructure::Generator, GenSpot, P).bValid)
-				Sim->BuildStructure(EMinStructure::Generator, GenSpot, P);
-			UE_LOG(LogMin, Log, TEXT("AutoBuild: chain at iron deposit %d (%d,%d) plane %d"),
-				D.Id, D.Center.X, D.Center.Y, P);
-			// center camera on the action
-			if (AMinPawn* Pawn = Cast<AMinPawn>(UGameplayStatics::GetPlayerPawn(this, 0)))
-			{
-				Pawn->PanCenter = FVector2D(D.Center.X * Min::CellSize, -D.Center.Y * Min::CellSize);
-				Pawn->OrthoWidth = 3200.f;
-			}
-			return;
 		}
+		UE_LOG(LogMin, Log, TEXT("AutoBuild: iron chain (%d,%d) -> base (%d,%d) plane %d"),
+			D.Center.X, D.Center.Y, BC.X, BC.Y, P);
+		if (AMinPawn* Pawn = Cast<AMinPawn>(UGameplayStatics::GetPlayerPawn(this, 0)))
+		{
+			Pawn->PanCenter = FVector2D((D.Center.X + BC.X) * 0.5f * Min::CellSize,
+				-(D.Center.Y + BC.Y) * 0.5f * Min::CellSize);
+			Pawn->OrthoWidth = 4200.f;
+		}
+		return;
 	}
 	UE_LOG(LogMin, Warning, TEXT("AutoBuild: no viable iron chain found"));
+}
+
+// ---------------------------------------------------------------------------
+// Tutorial
+// ---------------------------------------------------------------------------
+void AMinGameMode::SetTutStep(int32 Step)
+{
+	TutStep = Step;
+	bTutFinal = false;
+	TutBaselineEdges = 0;
+	if (Sim) for (const FMinEdge& E : Sim->Edges) if (E.bAlive) ++TutBaselineEdges;
+
+	switch (Step)
+	{
+	case 0:
+		TutTitle = TEXT("Welcome to MIN3D");
+		TutText = TEXT("The big building on the surface is your BASE - every supply you mine must ultimately arrive there. Pan with WASD or middle-drag, zoom with the mouse wheel.");
+		break;
+	case 1:
+		TutTitle = TEXT("Dig");
+		TutText = TEXT("Press 1, then click and drag to dig a tunnel from the marked iron deposit up to the shaft beneath your Base. Release to build.");
+		break;
+	case 2:
+		TutTitle = TEXT("Mine");
+		TutText = TEXT("Press 3 and click the marked iron deposit to place a Miner on it.");
+		break;
+	case 3:
+		TutTitle = TEXT("Deliver");
+		TutText = TEXT("Carts now haul ore home on their own - as long as your tunnel actually reaches the Base. Dig more if it doesn't. Waiting for your first delivery...");
+		break;
+	case 4:
+		TutTitle = TEXT("Planes");
+		TutText = TEXT("This world is 10 parallel planes. Press Q/E to switch planes, G toggles neighbor ghosts, Tab opens the 3D matrix overview.");
+		break;
+	case 5:
+		TutTitle = TEXT("Lifts");
+		TutText = TEXT("Richer ore hides on other planes. Press 8, click a cell, switch planes with Q/E, then click again to connect them with a Lift. (Or press Next to skip.)");
+		break;
+	case 6:
+		TutTitle = TEXT("Good digging!");
+		TutText = TEXT("Smelters [5] refine ore into ingots, Generators [7] burn coal to power nearby machines, Pipes [2] carry water across aquifers. The contracts in the top right guide you from here.");
+		bTutFinal = true;
+		break;
+	default:
+		TutStep = -1;
+		break;
+	}
+}
+
+void AMinGameMode::TutorialNext()
+{
+	if (TutStep < 0) return;
+	if (TutStep >= 6) { TutorialSkip(); return; }
+	SetTutStep(TutStep + 1);
+	if (Audio) Audio->Play(EMinSfx::Click);
+}
+
+void AMinGameMode::TutorialSkip()
+{
+	TutStep = -1;
+	if (TutMarkerActor) TutMarkerActor->SetActorHiddenInGame(true);
+}
+
+void AMinGameMode::TickTutorial(float DeltaSeconds)
+{
+	if (TutStep < 0 || !Sim) return;
+	AMinPawn* Pawn = Cast<AMinPawn>(UGameplayStatics::GetPlayerPawn(this, 0));
+
+	// advance on the player's actions
+	switch (TutStep)
+	{
+	case 1:
+	{
+		int32 Alive = 0;
+		for (const FMinEdge& E : Sim->Edges) if (E.bAlive) ++Alive;
+		if (Alive > TutBaselineEdges) TutorialNext();
+		break;
+	}
+	case 2:
+		for (const FMinStructureInst& S : Sim->Structures)
+			if (S.bAlive && S.Type == EMinStructure::Miner) { TutorialNext(); break; }
+		break;
+	case 3:
+		if (Sim->TotalDeliveries > 0) TutorialNext();
+		break;
+	case 4:
+		if (Pawn && (Pawn->ViewPlane != Min::CurrentPlane || Pawn->bMatrixView)) TutorialNext();
+		break;
+	case 5:
+		for (const FMinStructureInst& S : Sim->Structures)
+			if (S.bAlive && S.Type == EMinStructure::Lift) { TutorialNext(); break; }
+		break;
+	default: break;
+	}
+	if (TutStep < 0) return;
+
+	// pulsing ring over the current objective
+	TutTarget = FIntVector(-1, -1, -1);
+	if (TutStep == 1 || TutStep == 2)
+	{
+		const FIntVector BC = Sim->BaseCell();
+		int32 BestDist = MAX_int32;
+		for (const FMinDeposit& D : MinWorld->Deposits)
+		{
+			if (D.Plane != Min::CurrentPlane || D.Resource != EMinResource::Iron || D.Remaining <= 0) continue;
+			const int32 Dist = FMath::Abs(D.Center.X - BC.X) + FMath::Abs(D.Center.Y - BC.Y);
+			if (Dist < BestDist) { BestDist = Dist; TutTarget = FIntVector(D.Center.X, D.Center.Y, D.Plane); }
+		}
+	}
+	else if (TutStep == 3) TutTarget = Sim->BaseCell();
+
+	if (!TutMarkerActor && Assets)
+	{
+		TutMarkerActor = GetWorld()->SpawnActor<AActor>();
+		USceneComponent* Root = NewObject<USceneComponent>(TutMarkerActor);
+		TutMarkerActor->SetRootComponent(Root);
+		Root->RegisterComponent();
+		TutMarker = Assets->MakeSpriteComponent(TutMarkerActor, TEXT("veh_09_06"), 300.f,
+			FLinearColor(1.f, 0.85f, 0.4f), 0.9f, /*SortPriority=*/6);
+	}
+	if (TutMarkerActor && TutMarker)
+	{
+		const bool bShow = TutTarget.X >= 0 && Pawn && !Pawn->bMatrixView && Pawn->ViewPlane == TutTarget.Z;
+		TutMarkerActor->SetActorHiddenInGame(!bShow);
+		if (bShow)
+		{
+			TutPulse += DeltaSeconds * 3.f;
+			const float S = 3.0f + FMath::Sin(TutPulse) * 0.35f;
+			TutMarker->SetWorldLocation(Min::CellToWorld(TutTarget.X, TutTarget.Y, TutTarget.Z, Min::DepthFX));
+			TutMarker->SetWorldScale3D(FVector(S, 1.f, S));
+		}
+	}
 }
 
 void AMinGameMode::Tick(float DeltaSeconds)
@@ -198,6 +364,8 @@ void AMinGameMode::Tick(float DeltaSeconds)
 			MinWorld->DirtyRects[P] = FIntRect();
 		}
 	}
+
+	TickTutorial(DeltaSeconds);
 
 	if (RunTime >= HeartbeatAt)
 	{

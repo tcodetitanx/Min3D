@@ -388,6 +388,7 @@ void AMinPlaneActor::SyncStructures(UMinSim* Sim)
 	{
 		switch (T)
 		{
+		case EMinStructure::Base: return 420.f;
 		case EMinStructure::Smelter: return 230.f;
 		case EMinStructure::Depot: return 210.f;
 		case EMinStructure::Generator: return 190.f;
@@ -407,8 +408,10 @@ void AMinPlaneActor::SyncStructures(UMinSim* Sim)
 		{
 			UStaticMeshComponent* C = Assets->MakeSpriteComponent(this, SpriteFor(S), SizeFor(S.Type),
 				FLinearColor::White, 1.f, /*SortPriority=*/3);
-			const int32 CellY = S.Cell.Z == Plane ? S.Cell.Y : S.Cell.Y;
-			C->SetWorldLocation(Min::CellToWorld(S.Cell.X, CellY, Plane, Min::DepthStructure));
+			FVector Loc = Min::CellToWorld(S.Cell.X, S.Cell.Y, Plane, Min::DepthStructure);
+			// the base building sits on top of the surface rather than inside it
+			if (S.Type == EMinStructure::Base) Loc.Z += Min::CellSize * 1.4f;
+			C->SetWorldLocation(Loc);
 			StructureSprites.Add(Key, C);
 		}
 		else if (!bHere && Existing)

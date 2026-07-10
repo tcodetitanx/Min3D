@@ -36,7 +36,9 @@ void AMinPawn::UpdateCamera(float DeltaSeconds)
 	{
 		Camera->SetProjectionMode(ECameraProjectionMode::Orthographic);
 		Camera->SetOrthoWidth(OrthoWidth);
-		SetActorLocation(FVector(PanCenter.X, PlaneYCur - 2.5f * Min::PlaneGap, PanCenter.Y));
-		SetActorRotation(FRotator(0.f, 90.f, 0.f)); // look along +Y
+		// look along -Y so that screen-right is world +X (right-handed view;
+		// a +Y-facing camera mirrors the X axis and made mouse picking flip)
+		SetActorLocation(FVector(PanCenter.X, PlaneYCur + 2.5f * Min::PlaneGap, PanCenter.Y));
+		SetActorRotation(FRotator(0.f, -90.f, 0.f));
 	}
 }

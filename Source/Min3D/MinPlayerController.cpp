@@ -63,6 +63,7 @@ void AMinPlayerController::ContinueGame()
 	{
 		if (UMinSim::SaveExists()) Sim->LoadGame();
 	}
+	if (AMinGameMode* GM = GetGM()) GM->TutorialSkip();
 	StartNewGame();
 }
 

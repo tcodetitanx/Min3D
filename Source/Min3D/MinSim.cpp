@@ -73,6 +73,7 @@ const TCHAR* UMinSim::StructureName(EMinStructure Type)
 	case EMinStructure::Depot: return TEXT("Depot");
 	case EMinStructure::Generator: return TEXT("Generator");
 	case EMinStructure::Lift: return TEXT("Lift");
+	case EMinStructure::Base: return TEXT("Base");
 	default: return TEXT("?");
 	}
 }
@@ -87,8 +88,50 @@ const TCHAR* UMinSim::StructureSprite(EMinStructure Type)
 	case EMinStructure::Depot: return TEXT("net_04_03");
 	case EMinStructure::Generator: return TEXT("mac_07_00");
 	case EMinStructure::Lift: return TEXT("net_02_05");
+	case EMinStructure::Base: return TEXT("net_04_00");
 	default: return TEXT("net_06_00");
 	}
+}
+
+FIntVector UMinSim::BaseCell() const
+{
+	return Structures.IsValidIndex(BaseStructId) ? Structures[BaseStructId].Cell : FIntVector(Min::NX / 2, Min::SkyRows, Min::CurrentPlane);
+}
+
+void UMinSim::EnsureBase()
+{
+	if (BaseStructId >= 0) return;
+	const int32 P = Min::CurrentPlane;
+	// find a diggable surface cell near the middle of the starting plane
+	for (int32 Attempt = 0; Attempt < 40; ++Attempt)
+	{
+		const int32 X = Min::NX / 2 + ((Attempt % 2) ? 1 : -1) * ((Attempt + 1) / 2);
+		if (X < 2 || X >= Min::NX - 2) continue;
+		int32 SurfY = -1;
+		for (int32 Y = 0; Y < Min::NY; ++Y)
+			if (World->Cell(X, Y, P).Terrain != EMinTerrain::Sky) { SurfY = Y; break; }
+		if (SurfY < 0 || !World->IsDiggable(X, SurfY, P)) continue;
+
+		// carve the base chamber and a starter shaft below it
+		World->Excavate(X, SurfY, P);
+		for (int32 D = 1; D <= 3; ++D)
+			if (World->IsDiggable(X, SurfY + D, P)) World->Excavate(X, SurfY + D, P);
+
+		FMinStructureInst S;
+		S.Id = Structures.Num();
+		S.Type = EMinStructure::Base;
+		S.Cell = FIntVector(X, SurfY, P);
+		S.NodeId = EnsureNodeAt(S.Cell, EMinRoute::Tunnel);
+		Nodes[S.NodeId].StructureId = S.Id;
+		World->Cell(X, SurfY, P).StructureId = S.Id;
+		BaseStructId = S.Id;
+		Structures.Add(MoveTemp(S));
+		bStructuresDirty = true;
+		bTopologyDirty = true;
+		UE_LOG(LogMin, Log, TEXT("Base placed at (%d,%d) plane %s"), X, SurfY, *Min::PlaneName(P));
+		return;
+	}
+	UE_LOG(LogMin, Error, TEXT("EnsureBase: no viable surface cell found"));
 }
 
 void UMinSim::Init(UMinWorld* InWorld, UMinAssets* InAssets, AMinGameMode* InGM)
@@ -105,11 +148,11 @@ void UMinSim::SetupContracts()
 	FMinContract C;
 	C.Title = TEXT("First Ore");
 	C.Resource = EMinResource::Iron; C.Needed = 20; C.RewardCredits = 140;
-	C.Hint = TEXT("Dig a tunnel [1] from an iron deposit, place a Miner [3] on it and a Depot [6] in a cavern, then connect them.");
+	C.Hint = TEXT("Dig a tunnel [1] from an iron deposit up to your surface Base and place a Miner [3] on the deposit. Carts flow home on their own.");
 	Contracts.Add(C);
 	C.Title = TEXT("Smelting Works");
 	C.Resource = EMinResource::IronIngot; C.Needed = 12; C.RewardCredits = 220;
-	C.Hint = TEXT("Build a Smelter [5]. Ore routed into it becomes ingots bound for your depot. Generators [7] burning coal speed everything up.");
+	C.Hint = TEXT("Build a Smelter [5] along the way. Ore routed into it becomes ingots bound for the Base. Generators [7] burning coal speed everything up.");
 	Contracts.Add(C);
 	C.Title = TEXT("Copper Run");
 	C.Resource = EMinResource::CopperIngot; C.Needed = 15; C.RewardCredits = 320;
@@ -117,7 +160,7 @@ void UMinSim::SetupContracts()
 	Contracts.Add(C);
 	C.Title = TEXT("Waterworks");
 	C.Resource = EMinResource::Water; C.Needed = 25; C.RewardCredits = 260;
-	C.Hint = TEXT("Aquifers block tunnels - but Pipes [2] may cross them. Place a Pump [4] on a water spring.");
+	C.Hint = TEXT("Aquifers block tunnels - but Pipes [2] may cross them. Place a Pump [4] on a water spring and pipe the water home to the Base.");
 	Contracts.Add(C);
 	C.Title = TEXT("Gold Standard");
 	C.Resource = EMinResource::GoldBar; C.Needed = 8; C.RewardCredits = 500;
@@ -274,6 +317,7 @@ void UMinSim::RemoveEdge(int32 EdgeId)
 void UMinSim::RemoveStructure(int32 StructId)
 {
 	if (!Structures.IsValidIndex(StructId) || !Structures[StructId].bAlive) return;
+	if (Structures[StructId].Type == EMinStructure::Base) return; // the Base is permanent
 	FMinStructureInst& S = Structures[StructId];
 	S.bAlive = false;
 	auto ClearCellAndNode = [&](const FIntVector& Cell, int32 NodeId)
@@ -536,7 +580,16 @@ bool UMinSim::RemoveAt(const FIntPoint& Cell, int32 Plane)
 {
 	const FIntVector C3(Cell.X, Cell.Y, Plane);
 	const FMinCell& C = World->Cell(Cell.X, Cell.Y, Plane);
-	if (C.StructureId >= 0) { RemoveStructure(C.StructureId); return true; }
+	if (C.StructureId >= 0)
+	{
+		if (Structures.IsValidIndex(C.StructureId) && Structures[C.StructureId].Type == EMinStructure::Base)
+		{
+			OnEvent.Broadcast(TEXT("The Base cannot be removed"));
+			return false;
+		}
+		RemoveStructure(C.StructureId);
+		return true;
+	}
 	if (const int32* EdgeId = EdgeAtCell.Find(C3))
 	{
 		Credits += FMath::RoundToInt(Edges[*EdgeId].Length * 0.6f);
@@ -625,7 +678,9 @@ bool UMinSim::StructureAcceptsCargo(const FMinStructureInst& S, EMinResource Car
 	if (!S.bAlive) return false;
 	switch (S.Type)
 	{
-	case EMinStructure::Depot: return true;
+	case EMinStructure::Base: return true;
+	case EMinStructure::Depot: // relay storage - one resource at a time
+		return (S.Buffer == 0 || S.BufferRes == Cargo) && S.Buffer < 16;
 	case EMinStructure::Smelter:
 		return ProcessedForm(Cargo) != EMinResource::None
 			&& (S.InputRes == EMinResource::None || S.InputRes == Cargo)
@@ -646,13 +701,16 @@ int32 UMinSim::PickDestination(const FMinStructureInst& Source, EMinResource Car
 	for (const FMinStructureInst& Dest : Structures)
 	{
 		if (Dest.Id == Source.Id || !StructureAcceptsCargo(Dest, Cargo)) continue;
-		// smelters shouldn't hoard what depots want more: order by path cost only
+		// depots only forward onward to the Base - everything ends up there
+		if (Source.Type == EMinStructure::Depot && Dest.Type != EMinStructure::Base) continue;
 		float Cost;
 		if (FindPath(Source.NodeId, Dest.NodeId, bFluid, TmpE, TmpN, &Cost))
 		{
-			// prefer processors for raw ore so the chain builds itself
+			// prefer processors for raw ore so the chain builds itself,
+			// and depots slightly, as consolidation points on the way home
 			if (Dest.Type == EMinStructure::Smelter) Cost *= 0.5f;
-			if (Dest.Type == EMinStructure::Generator) Cost *= 0.6f;
+			else if (Dest.Type == EMinStructure::Generator) Cost *= 0.6f;
+			else if (Dest.Type == EMinStructure::Depot) Cost *= 0.85f;
 			if (Cost < BestCost)
 			{
 				BestCost = Cost;
@@ -694,8 +752,9 @@ void UMinSim::DeliverCargo(FMinCart& Cart)
 
 	switch (Dest.Type)
 	{
-	case EMinStructure::Depot:
+	case EMinStructure::Base:
 	{
+		// the Base is where supplies count: stock, credits, contracts
 		Stock.FindOrAdd(Cart.Cargo) += Cart.Amount;
 		Credits += ResValue(Cart.Cargo) * Cart.Amount;
 		TotalDeliveries += Cart.Amount;
@@ -708,6 +767,10 @@ void UMinSim::DeliverCargo(FMinCart& Cart)
 		if (Audio) Audio->Play(EMinSfx::Delivery, 0.5f);
 		break;
 	}
+	case EMinStructure::Depot:
+		Dest.BufferRes = Cart.Cargo;
+		Dest.Buffer += Cart.Amount;
+		break;
 	case EMinStructure::Smelter:
 		Dest.InputRes = Cart.Cargo;
 		Dest.InputBuffer += Cart.Amount;
@@ -730,7 +793,11 @@ void UMinSim::UpdatePower()
 		S.bPowered = false;
 		for (const FMinStructureInst& Gen : Structures)
 		{
-			if (!Gen.bAlive || Gen.Type != EMinStructure::Generator || Gen.FuelSeconds <= 0.f) continue;
+			if (!Gen.bAlive) continue;
+			// the Base powers its surroundings for free; generators need fuel
+			const bool bPowerSource = Gen.Type == EMinStructure::Base
+				|| (Gen.Type == EMinStructure::Generator && Gen.FuelSeconds > 0.f);
+			if (!bPowerSource) continue;
 			const FIntVector D = S.Cell - Gen.Cell;
 			if (FMath::Abs(D.X) + FMath::Abs(D.Y) + FMath::Abs(D.Z) * 8 <= PowerRadius)
 			{
@@ -801,6 +868,13 @@ void UMinSim::TickStructures(float Dt)
 			}
 			break;
 		}
+		case EMinStructure::Depot:
+			if (S.Buffer >= CartLoad && S.RetryTimer <= 0.f)
+			{
+				S.RetryTimer = 1.0f;
+				DispatchFrom(S, S.BufferRes, CartLoad);
+			}
+			break;
 		case EMinStructure::Generator:
 			S.FuelSeconds = FMath::Max(0.f, S.FuelSeconds - Dt);
 			break;
@@ -977,7 +1051,7 @@ bool UMinSim::SaveGame(const FString& Slot) const
 	TArray<TSharedPtr<FJsonValue>> JStructs;
 	for (const FMinStructureInst& S : Structures)
 	{
-		if (!S.bAlive) continue;
+		if (!S.bAlive || S.Type == EMinStructure::Base) continue; // base is recreated deterministically
 		TSharedRef<FJsonObject> O = MakeShared<FJsonObject>();
 		O->SetNumberField(TEXT("type"), (int32)S.Type);
 		O->SetNumberField(TEXT("x"), S.Cell.X);

@@ -27,6 +27,7 @@ private:
 	TSharedRef<SWidget> BuildToolbar();
 	TSharedRef<SWidget> BuildContractPanel();
 	TSharedRef<SWidget> BuildStatusArea();
+	TSharedRef<SWidget> BuildTutorialPanel();
 };
 
 // Title screen overlay.

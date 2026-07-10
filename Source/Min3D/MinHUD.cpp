@@ -71,6 +71,8 @@ void SMinHUD::Construct(const FArguments& InArgs, AMinPlayerController* InPC)
 		[ BuildToolbar() ]
 		+ SOverlay::Slot().HAlign(HAlign_Left).VAlign(VAlign_Bottom).Padding(12, 0, 0, 14)
 		[ BuildStatusArea() ]
+		+ SOverlay::Slot().HAlign(HAlign_Left).VAlign(VAlign_Top).Padding(10, 64, 0, 0)
+		[ BuildTutorialPanel() ]
 	];
 	SetVisibility(TAttribute<EVisibility>::CreateLambda([this]()
 	{
@@ -348,6 +350,80 @@ TSharedRef<SWidget> SMinHUD::BuildStatusArea()
 				*PlaneStr));
 		}))
 	];
+}
+
+TSharedRef<SWidget> SMinHUD::BuildTutorialPanel()
+{
+	return SNew(SBorder)
+		.BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
+		.BorderBackgroundColor(FLinearColor(0.05f, 0.07f, 0.07f, 0.80f))
+		.Padding(FMargin(14, 10))
+		.Visibility_Lambda([this]()
+		{
+			AMinGameMode* GM = PC ? PC->GetGM() : nullptr;
+			return GM && GM->TutStep >= 0 ? EVisibility::Visible : EVisibility::Collapsed;
+		})
+		[
+			SNew(SBox).WidthOverride(340)
+			[
+				SNew(SVerticalBox)
+				+ SVerticalBox::Slot().AutoHeight()
+				[
+					SNew(STextBlock).Font(Font(16)).ColorAndOpacity(Accent)
+					.Text_Lambda([this]()
+					{
+						AMinGameMode* GM = PC ? PC->GetGM() : nullptr;
+						return GM ? FText::FromString(GM->TutTitle) : FText::GetEmpty();
+					})
+				]
+				+ SVerticalBox::Slot().AutoHeight().Padding(0, 6)
+				[
+					SNew(STextBlock).Font(Font(12, "Regular")).ColorAndOpacity(Cream)
+					.AutoWrapText(true)
+					.Text_Lambda([this]()
+					{
+						AMinGameMode* GM = PC ? PC->GetGM() : nullptr;
+						return GM ? FText::FromString(GM->TutText) : FText::GetEmpty();
+					})
+				]
+				+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
+				[
+					SNew(SHorizontalBox)
+					+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 8, 0)
+					[
+						SNew(SButton)
+						.ButtonColorAndOpacity(Accent)
+						.OnClicked_Lambda([this]()
+						{
+							if (AMinGameMode* GM = PC ? PC->GetGM() : nullptr) GM->TutorialNext();
+							return FReply::Handled();
+						})
+						[
+							SNew(STextBlock).Font(Font(12)).ColorAndOpacity(FLinearColor(0.05f, 0.08f, 0.08f))
+							.Text_Lambda([this]()
+							{
+								AMinGameMode* GM = PC ? PC->GetGM() : nullptr;
+								return FText::FromString(GM && GM->bTutFinal ? TEXT("Finish") : TEXT("Next"));
+							})
+						]
+					]
+					+ SHorizontalBox::Slot().AutoWidth()
+					[
+						SNew(SButton)
+						.ButtonColorAndOpacity(FLinearColor(0.3f, 0.29f, 0.27f))
+						.OnClicked_Lambda([this]()
+						{
+							if (AMinGameMode* GM = PC ? PC->GetGM() : nullptr) GM->TutorialSkip();
+							return FReply::Handled();
+						})
+						[
+							SNew(STextBlock).Font(Font(12)).ColorAndOpacity(Cream)
+							.Text(FText::FromString(TEXT("Skip tutorial")))
+						]
+					]
+				]
+			]
+		];
 }
 
 // ---------------------------------------------------------------------------

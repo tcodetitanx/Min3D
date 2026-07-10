@@ -41,6 +41,11 @@ public:
 	static const TCHAR* StructureName(EMinStructure Type);
 	static const TCHAR* StructureSprite(EMinStructure Type);
 
+	// the surface headquarters every supply chain ultimately feeds
+	void EnsureBase();
+	int32 BaseStructId = -1;
+	FIntVector BaseCell() const;
+
 	// ---- state -------------------------------------------------------------
 	TArray<FMinNode> Nodes;
 	TArray<FMinEdge> Edges;

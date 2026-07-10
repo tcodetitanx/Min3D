@@ -1,6 +1,6 @@
 {
 	"FileVersion": 3,
-	"EngineAssociation": "5.8",
+	"EngineAssociation": "{6CB0E882-4747-2B40-4252-92881166BB2F}",
 	"Category": "Game",
 	"Description": "Min3D (Mine + Mind + 3D) - a minimalist mining, logistics and route-optimization puzzle inside a living underground cube.",
 	"Modules": [

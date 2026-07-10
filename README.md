@@ -17,18 +17,21 @@ The world is a 96 × 48 × 10 lattice of pastel underground terrain: ten paralle
 deposits, aquifers, caverns and unbreakable granite are placed by a seeded
 generator; geological bands warp gently with depth.
 
-You dig tunnels **by clicking and dragging**, place miners on deposits, pumps on
-aquifer springs, smelters, depots and coal-fired generators, and connect planes
-with lifts. Carts flow along the route graph automatically — A* with congestion
-and transfer penalties — and congested lanes glow red and slow down. Contracts
-walk you from your first iron delivery to deep-plane gold logistics.
+Your **Base** sits on the surface — every supply you mine must ultimately be
+routed home to it. You dig tunnels **by clicking and dragging**, place miners on
+deposits, pumps on aquifer springs, smelters, relay depots and coal-fired
+generators, and connect planes with lifts. Carts flow along the route graph
+automatically — A* with congestion and transfer penalties — and congested lanes
+glow red and slow down. An interactive tutorial teaches the loop; contracts
+then walk you from your first iron delivery to deep-plane gold logistics.
 
 ![Plane view](Docs/screenshots/plane_view.png)
 
 - **Tunnels flood in aquifers — pipes may cross them.** Granite cannot be dug.
-- Smelters turn ore into ingots and dispatch them onward on their own.
-- Generators burn delivered coal and power nearby structures; unpowered
-  machines crawl at 35 % speed.
+- Smelters turn ore into ingots and dispatch them onward on their own; depots
+  are relays that consolidate cargo and forward it home to the Base.
+- Generators burn delivered coal and power nearby structures (the Base powers
+  its surroundings for free); unpowered machines crawl at 35 % speed.
 - Neighboring planes ghost through at 20 % / 8 % opacity; **Tab** opens a matrix
   overview of the whole cube.
 

@@ -17,13 +17,13 @@ namespace Min
 	constexpr float PlaneGap = 800.f; // world Y between planes
 	constexpr int32 TexPerCell = 12;  // terrain texture pixels per cell
 
-	// depth offsets (towards camera = -Y) for layering within one plane
+	// depth offsets (towards camera = +Y) for layering within one plane
 	constexpr float DepthTerrain = 0.f;
-	constexpr float DepthDeposit = -8.f;
-	constexpr float DepthRoute = -16.f;
-	constexpr float DepthStructure = -28.f;
-	constexpr float DepthCart = -40.f;
-	constexpr float DepthFX = -52.f;
+	constexpr float DepthDeposit = 8.f;
+	constexpr float DepthRoute = 16.f;
+	constexpr float DepthStructure = 28.f;
+	constexpr float DepthCart = 40.f;
+	constexpr float DepthFX = 52.f;
 
 	inline FVector CellToWorld(int32 X, int32 Y, int32 P, float DepthBias = 0.f)
 	{
@@ -61,7 +61,7 @@ enum class EMinResource : uint8
 UENUM()
 enum class EMinStructure : uint8
 {
-	None, Miner, Pump, Smelter, Depot, Generator, Lift
+	None, Miner, Pump, Smelter, Depot, Generator, Lift, Base
 };
 
 UENUM()
