@@ -247,16 +247,28 @@ bool AMinPlayerController::GetMouseCell(FIntPoint& OutCell) const
 	float MX, MY;
 	if (!GetMousePosition(MX, MY)) return false;
 
-	// analytic orthographic mapping over the viewport. Engine deprojection is
-	// NOT used here: with this ortho setup it returns aspect-scaled results
-	// that disagree with what is actually rendered, while this mapping was
-	// verified pixel-exact against rendered geometry via synthetic drags.
-	int32 VX, VY;
-	GetViewportSize(VX, VY);
-	if (VX <= 0 || VY <= 0) return false;
-	const float WorldX = P->PanCenter.X + (MX / VX - 0.5f) * P->OrthoWidth;
-	const float WorldZ = P->PanCenter.Y - (MY / VY - 0.5f) * P->OrthoWidth * (float(VY) / VX);
-	OutCell = Min::WorldToCell(FVector(WorldX, 0.f, WorldZ));
+	// engine deprojection inverts the exact view-projection the frame rendered
+	// with. (UE 5.8 applies OrthoWidth to the vertical axis here, so any
+	// hand-rolled mapping must NOT assume OrthoWidth spans the screen width.)
+	FVector Origin, Dir;
+	if (UGameplayStatics::DeprojectScreenToWorld(this, FVector2D(MX, MY), Origin, Dir)
+		&& !FMath::IsNearlyZero(Dir.Y))
+	{
+		const float PlaneY = P->ViewPlane * Min::PlaneGap;
+		const float T = (PlaneY - Origin.Y) / Dir.Y;
+		OutCell = Min::WorldToCell(Origin + Dir * T);
+	}
+	else
+	{
+		// fallback: OrthoWidth-as-height analytic mapping
+		int32 VX, VY;
+		GetViewportSize(VX, VY);
+		if (VX <= 0 || VY <= 0) return false;
+		const float UUPerPx = P->OrthoWidth / VY;
+		const float WorldX = P->PanCenter.X + (MX - VX * 0.5f) * UUPerPx;
+		const float WorldZ = P->PanCenter.Y - (MY - VY * 0.5f) * UUPerPx;
+		OutCell = Min::WorldToCell(FVector(WorldX, 0.f, WorldZ));
+	}
 	return OutCell.X >= 0 && OutCell.X < Min::NX && OutCell.Y >= 0 && OutCell.Y < Min::NY;
 }
 
@@ -502,7 +514,7 @@ void AMinPlayerController::PlayerTick(float DeltaTime)
 		P->PanCenter.Y = FMath::Clamp(P->PanCenter.Y, -Min::NY * Min::CellSize, 0.f);
 	}
 
-	// middle-mouse drag pan
+	// middle-mouse drag pan (world sticks to the cursor)
 	if (IsInputKeyDown(EKeys::MiddleMouseButton) && !P->bMatrixView)
 	{
 		float MX, MY;
@@ -512,7 +524,7 @@ void AMinPlayerController::PlayerTick(float DeltaTime)
 			{
 				int32 VX, VY;
 				GetViewportSize(VX, VY);
-				const float UUPerPx = P->OrthoWidth / FMath::Max(1, VX);
+				const float UUPerPx = P->OrthoWidth / FMath::Max(1, VY);
 				P->PanCenter.X -= (MX - LastMouse.X) * UUPerPx;
 				P->PanCenter.Y += (MY - LastMouse.Y) * UUPerPx;
 			}
