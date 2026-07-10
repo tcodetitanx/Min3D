@@ -1,0 +1,1747 @@
+1. High-Level Concept
+
+Build a minimalist mining, logistics, and route-optimization game presented as a set of interconnected 2D terrain planes arranged inside a 3D cube.
+
+The player normally edits one 2D plane at a time. However, routes may move between planes through lifts, shafts, transfer nodes, and plane connectors.
+
+The world should feel like a combination of:
+
+Minimalist transit-network routing
+Spatial puzzle solving
+Light mining automation
+Factory logistics
+Permanent, continuously expanding infrastructure
+A layered 3D topology viewed through readable 2D slices
+
+The main challenge is not building the largest factory. It is designing the most efficient network through constrained three-dimensional terrain.
+
+The player must determine:
+
+Which plane each resource should travel through
+Where to cross between planes
+Which routes should share infrastructure
+Whether a direct route is worth its construction cost
+How to avoid congestion and conflicting crossings
+Where processing should occur
+Whether material should be refined near its source or transported raw
+How to reserve space for future expansion
+
+The world expands indefinitely outward and downward.
+
+2. Core Player Fantasy
+
+The player is designing an enormous subterranean transport lattice.
+
+A successful network should feel:
+
+Elegant
+Organized
+Geometrically satisfying
+Efficient
+Easy to understand at a glance
+Increasingly impressive as it grows
+
+The player should regularly experience moments such as:
+
+“This resource cannot reach the refinery on this plane, but I can move it two planes backward, route beneath the water pocket, transfer sideways, then return to the refinery plane.”
+
+The joy comes from discovering clean spatial solutions.
+
+3. Core Design Pillars
+3.1 Route Optimization First
+
+The central activity is creating efficient paths between:
+
+Resource deposits
+Extractors
+Transfer stations
+Processing facilities
+Storage hubs
+Delivery objectives
+
+Factories and automation support the routing puzzle rather than replacing it.
+
+A machine should matter because of where it must be connected, not because the player needs to manage hundreds of recipes.
+
+3.2 Understandable Three-Dimensionality
+
+The world is three-dimensional, but the player edits readable 2D slices.
+
+Never require the player to manipulate a confusing free-camera 3D factory for routine construction.
+
+Provide three main views:
+
+Plane View
+A single editable 2D cross-section.
+Ghosted Neighbor View
+The active plane with nearby planes faintly visible.
+Matrix Overview
+A rotatable or fixed isometric visualization of every plane and route.
+3.3 Beautiful Minimalism
+
+The terrain should use:
+
+Soft pastel colors
+Rounded geometry
+Subtle slopes
+Clean visual hierarchy
+Low visual noise
+Gentle gradients
+Small ambient animations
+
+The world should look handcrafted even though it is procedurally generated.
+
+3.4 Permanent Expansion
+
+This is not a sequence of disposable puzzle maps.
+
+The player owns one persistent network that expands through new sectors.
+
+New regions introduce:
+
+New resources
+New geological constraints
+New route restrictions
+New production demands
+New cross-plane dependencies
+3.5 Optimization Without Mandatory Perfection
+
+The game should reward better solutions without forcing a single correct answer.
+
+Players may create:
+
+A cheap but slow network
+A reliable redundant network
+A highly optimized compact network
+A complex high-throughput network
+4. World Representation
+
+Represent the underground world as a sparse three-dimensional grid of sectors.
+
+World
+ ├── X axis: horizontal expansion
+ ├── Y axis: depth
+ └── Z axis: plane position
+
+However, divide the Z axis into named plane slices.
+
+Example:
+
+B4 B3 B2 B1 CURRENT F1 F2 F3 F4 F5
+
+The player may also move through side-plane groups:
+
+S1 through S10
+
+A practical internal coordinate may be:
+
+Vector3i cell = (x, y, z)
+
+Each visible 2D plane edits two dimensions while holding the third constant.
+
+For example:
+
+Front plane view:
+x = horizontal position
+y = depth
+z = selected plane
+
+The “side-plane” system can initially be represented as a second slicing orientation over the same voxel grid rather than a literal fourth spatial dimension.
+
+Recommended implementation:
+
+Use one true 3D integer grid
+Support viewing slices along either the X or Z axis
+The normal front view fixes Z
+The side view fixes X
+Both views modify the same underlying world
+
+This produces actual three-dimensional problem solving without creating a four-dimensional data structure.
+
+5. World Cell Data
+
+Each grid cell should store something similar to:
+
+CellData
+{
+    Vector3Int coordinate;
+
+    TerrainType terrainType;
+    float hardness;
+    float stability;
+    float moisture;
+    float temperature;
+
+    ResourceType resourceType;
+    float resourceAmount;
+    float resourceRichness;
+
+    bool isExcavated;
+    bool isBuildable;
+    bool isProtected;
+    bool isHazardous;
+
+    StructureId structure;
+    RouteSegmentId routeSegment;
+
+    RegionId region;
+    GeologicalLayerId geologicalLayer;
+}
+
+Possible terrain types:
+
+Soft soil
+Sandstone
+Limestone
+Granite
+Salt layer
+Clay
+Crystal-bearing rock
+Aquifer
+Oil-bearing shale
+Uranium-bearing rock
+Unstable cavern
+Obsidian
+Volcanic rock
+Ice
+Toxic deposits
+Ancient artificial material
+6. Plane System
+
+The player should be able to change planes quickly.
+
+Controls should include:
+
+Previous plane
+Next plane
+Jump to active warning
+Jump to connected plane
+Open matrix overview
+Toggle neighboring-plane ghosts
+Change slicing axis
+Isolate one resource network
+Isolate one route
+
+Plane transitions should be nearly instantaneous.
+
+6.1 Ghost Visualization
+
+On the current plane:
+
+Current routes are fully opaque
+Routes one plane away are approximately 20% opaque
+Routes two planes away are approximately 8% opaque
+Only important neighboring nodes should be shown
+Cross-plane links should appear as vertical or depth-oriented glowing shafts
+
+The player must be able to distinguish:
+
+Route behind current plane
+Route in front of current plane
+Side-axis connection
+Depth connection
+Shared transfer node
+
+Use different edge treatments, not just color.
+
+Example:
+
+Behind: dotted outline
+In front: thin translucent glow
+Same plane: solid route
+Cross-plane shaft: pulsing ring or depth marker
+7. Main Gameplay Loop
+Reveal a new underground region.
+Inspect resource deposits across several planes.
+Receive production or delivery goals.
+Excavate tunnel corridors.
+Place miners or pumps.
+Connect them to processing and storage.
+Add lifts or plane connectors where direct paths are blocked.
+Start material flow.
+Observe congestion, delays, and power use.
+Improve the network.
+Unlock deeper or wider terrain.
+Integrate the new region into the permanent system.
+8. Resources
+
+Include at minimum:
+
+Solid Resources
+Stone
+Coal
+Iron ore
+Copper ore
+Gold ore
+Salt
+Uranium
+Quartz
+Sulfur
+Clay
+Sand
+Crystal
+Rare-earth ore
+Fluids
+Water
+Oil
+Brine
+Coolant
+Contaminated water
+Liquid fuel
+Processed Materials
+Stone blocks
+Iron ingots
+Copper ingots
+Gold bars
+Salt blocks
+Refined uranium
+Glass
+Steel
+Fuel
+Batteries
+Industrial components
+Machine parts
+Conductive cable
+Structural supports
+
+Do not begin with all of these.
+
+A sensible progression is:
+
+Tier 1:
+Stone, coal, iron, water
+
+Tier 2:
+Copper, salt, oil, sand
+
+Tier 3:
+Gold, sulfur, quartz, clay
+
+Tier 4:
+Uranium, crystal, rare-earth materials
+9. Extraction Buildings
+
+Use the provided sprites as visual assets for structures and icons.
+
+Core extractors:
+
+Basic miner
+Heavy miner
+Crystal miner
+Pumpjack
+Water pump
+Brine pump
+Quarry
+Deep drill
+Uranium extractor
+Gas collector
+
+Each extractor needs:
+
+Input:
+Power
+Optional workers
+Optional coolant
+
+Output:
+One resource type
+
+Properties:
+Extraction speed
+Range
+Power draw
+Noise or instability
+Storage buffer
+Required terrain
+
+Keep extraction mechanically simple. The puzzle should be connecting the output.
+
+10. Processing Buildings
+
+Processing should create meaningful routing decisions.
+
+Examples:
+
+Iron Ore -> Smelter -> Iron Ingot
+
+Iron Ingot + Coal -> Foundry -> Steel
+
+Copper Ore -> Smelter -> Copper Ingot
+
+Sand -> Furnace -> Glass
+
+Oil -> Refinery -> Fuel
+
+Water -> Treatment Plant -> Clean Water
+
+Brine -> Salt Processor -> Salt
+
+Uranium Ore -> Enrichment Plant -> Refined Uranium
+
+Crystal Ore -> Separator -> Crystal
+
+A processing building should usually have:
+
+One or two input ports
+One output port
+Internal buffer
+Throughput limit
+Power draw
+Footprint requirement
+
+Avoid recipes with six or seven ingredients. The routing space should provide the complexity.
+
+11. Route Types
+11.1 Cart Tunnels
+
+Used for solid cargo.
+
+Characteristics:
+
+Bidirectional or one-way
+Moderate capacity
+May become congested
+Supports junctions
+Requires excavated space
+11.2 Conveyors
+
+Used for continuous short-distance transport.
+
+Characteristics:
+
+High throughput
+Directional
+Difficult to reroute
+Good inside factory clusters
+Cannot traverse every terrain type
+11.3 Pipes
+
+Used for fluids.
+
+Characteristics:
+
+Oil, water, brine, fuel, coolant
+Pressure or throughput limit
+Can share pipe corridors only with upgrades
+Pumps required for long vertical climbs
+11.4 Lifts
+
+Move cargo vertically through depth.
+
+Characteristics:
+
+Connect multiple Y levels
+Expensive
+High capacity
+Creates a shared bottleneck
+Requires power
+11.5 Plane Connectors
+
+Move routes between parallel planes.
+
+Characteristics:
+
+Connect neighboring Z slices
+May be directional
+Limited throughput
+Valuable puzzle resource
+Can become congested
+11.6 Transfer Nodes
+
+Convert or transfer cargo between routing systems.
+
+Examples:
+
+Cart to conveyor
+Pipe to tank
+Plane connector to lift
+Local line to trunk line
+12. Core Puzzle Restrictions
+
+Each region should contain combinations of restrictions.
+
+Possible restrictions:
+
+Unbreakable rock
+Protected crystal formations
+Aquifers that flood nearby tunnels
+Lava or high-temperature cells
+Unstable areas that limit heavy structures
+Oil pockets that cannot be crossed by ordinary tunnels
+Radiation zones
+Maximum tunnel length
+Limited plane connectors
+Limited lift count
+One-way geological fractures
+Regions where routes cannot cross
+Regions allowing only pipes
+Regions allowing only lightweight carts
+Power interference zones
+Preservation zones
+Existing legacy infrastructure
+Required delivery order
+Shared bottleneck portals
+
+The best puzzles should combine two or three restrictions, not ten.
+
+13. Efficiency Scoring
+
+The player should receive useful feedback but not be forced into one solution.
+
+Track:
+
+Average delivery time
+Total route length
+Material throughput
+Congestion
+Power efficiency
+Number of transfer points
+Construction cost
+Route overlap
+Idle machine time
+Deadhead travel
+Network resilience
+Unused capacity
+Pollution
+Excavated volume
+
+Possible score formula:
+
+Network Efficiency =
+Delivered Value
+/
+(
+Travel Cost
++ Power Cost
++ Congestion Penalty
++ Transfer Penalty
++ Construction Amortization
+)
+
+Use normalized values rather than raw units.
+
+Example:
+
+efficiency =
+    delivered_units * average_delivery_value
+    / max(
+        1,
+        total_route_distance * 0.2
+        + energy_used * 0.3
+        + average_delay * 0.4
+        + transfer_count * 2.0
+    )
+
+Do not expose the entire mathematical formula by default. Present understandable diagnostics:
+
+“Copper spends 38% of its journey waiting.”
+“This lift operates at 96% capacity.”
+“Moving the smelter closer would reduce route length by 22%.”
+“The F2 plane has unused tunnel capacity.”
+14. Vehicle and Cargo Simulation
+
+Do not simulate every wheel or physics interaction.
+
+Use graph-based movement.
+
+Each route network is a graph:
+
+Node:
+Junction, building port, transfer point, lift, connector
+
+Edge:
+Tunnel, conveyor, pipe, cross-plane segment
+
+Vehicles and cargo move along graph edges.
+
+RouteNode
+{
+    NodeId id;
+    Vector3Int worldPosition;
+    NodeType type;
+    List<EdgeId> edges;
+}
+
+RouteEdge
+{
+    EdgeId id;
+    NodeId start;
+    NodeId end;
+
+    RouteType routeType;
+    float length;
+    float capacity;
+    float speed;
+    float congestion;
+    bool oneWay;
+}
+
+Pathfinding should initially use A* or Dijkstra.
+
+Edge cost:
+
+edge_cost =
+    travel_time
+    + congestion_penalty
+    + transfer_penalty
+    + hazard_penalty
+
+For repeated freight paths, cache route results until topology changes.
+
+15. Congestion
+
+Congestion is important because it turns route drawing into an optimization problem.
+
+Every edge has:
+
+Maximum occupancy
+Maximum throughput per second
+Current queue
+Speed multiplier
+
+Example:
+
+load_ratio = current_occupancy / max_occupancy
+
+if load_ratio <= 0.7:
+    speed_multiplier = 1.0
+else:
+    speed_multiplier = lerp(1.0, 0.25, inverse_lerp(0.7, 1.4, load_ratio))
+
+Junctions should also have capacity.
+
+A route can therefore be short but inefficient because too many networks share one junction.
+
+16. Factories and Automation
+
+Factories should be present but secondary.
+
+The player should not need to configure complex inserters, belts, or individual machine recipes.
+
+Use high-level automation:
+
+A building requests resources automatically
+Nearby storage distributes material
+Cargo is assigned to routes
+Processing begins when inputs arrive
+Outputs are automatically dispatched to valid destinations
+
+The player controls:
+
+Facility placement
+Route topology
+Priority
+Allowed cargo
+Direction
+Buffer size
+Processing target
+Network assignment
+
+The player should not control:
+
+Individual worker tasks
+Every loading animation
+Exact insertion arm timing
+Manual item stacking
+17. Resource Routing Rules
+
+Each source or storage may have an output policy:
+
+Nearest valid destination
+Highest priority
+Lowest congestion
+Lowest power cost
+Dedicated destination
+Balanced distribution
+Emergency-only
+
+Each route segment may have filters:
+
+All cargo
+Solids only
+Fluids only
+Specific resource
+Processed goods only
+Empty vehicles only
+Priority route
+
+This creates factory-like control without overwhelming the routing puzzle.
+
+18. Terrain Generation Overview
+
+The terrain generator must produce attractive pastel underground slices rather than obvious square tiles.
+
+Generate the simulation on a grid, but render it using smooth geometry.
+
+Separate:
+
+Logical terrain grid
+Rendered terrain surface
+
+The logical grid determines:
+
+Excavation
+Resources
+Hazards
+Structure placement
+Route occupancy
+
+The visual layer produces:
+
+Curved slopes
+Rounded caverns
+Soft geological bands
+Subtle texture
+Decorative rocks
+Pastel gradients
+19. Procedural Terrain Pipeline
+
+Use a multi-stage terrain generator.
+
+Stage 1: Base Density Field
+
+Generate continuous terrain density with layered noise.
+
+density =
+    base_depth_gradient
+    + large_scale_noise * 0.55
+    + medium_noise * 0.25
+    + fine_noise * 0.08
+    + geological_band_offset
+
+Recommended conceptual noise layers:
+
+Large noise for broad terrain shapes
+Medium noise for hills and caverns
+Fine noise for subtle variation
+Directional noise for geological strata
+
+Use OpenSimplex, simplex noise, or equivalent coherent noise.
+
+Stage 2: Geological Bands
+
+Create depth-dependent material bands.
+
+band_value =
+    y
+    + noise(x * 0.015, z * 0.015) * band_warp
+
+Assign rock types based on thresholds.
+
+Do not use perfectly horizontal layers. Warp them gently.
+
+Example:
+
+warped_depth =
+    world_y
+    + noise(world_x * 0.02, world_z * 0.02) * 12
+Stage 3: Caverns
+
+Create caves using a separate density field.
+
+cave_noise =
+    abs(noise3D(x * cave_scale, y * cave_scale, z * cave_scale))
+
+is_cave = cave_noise < cave_threshold
+
+Combine this with seeded spline caverns so important regions remain navigable.
+
+Stage 4: Puzzle Constraints
+
+After natural terrain generation, intentionally place puzzle structures:
+
+Barrier wall
+Aquifer
+Hazard band
+Restricted zone
+Resource basin
+Required connection corridor
+
+These should be authored by procedural templates, not left entirely to random noise.
+
+Stage 5: Resource Placement
+
+Resources should follow geological logic.
+
+Examples:
+
+Oil appears in sedimentary pockets
+Gold appears in narrow veins
+Salt appears in broad layered deposits
+Uranium appears deep and near granite
+Water gathers in cavities and aquifers
+Copper appears in clustered veins
+Iron appears in larger common deposits
+Stage 6: Visual Smoothing
+
+Convert the blocky simulation boundary to smooth visual geometry.
+
+Possible methods:
+
+Marching Squares for each 2D slice
+Marching Cubes for the matrix overview
+Signed distance field contouring
+Bezier smoothing over extracted contours
+Polygon triangulation with rounded corners
+
+For the normal plane view, Marching Squares is sufficient.
+
+20. Beautiful 2D Terrain Geometry
+
+The visible plane should not appear as a square tile map.
+
+Generate a scalar density field around the logical cells.
+
+Then extract terrain contours.
+
+for each render sample:
+    density = sample_logical_terrain_with_interpolation()
+
+contours = marching_squares(density, threshold = 0.5)
+smoothed_contours = chaikin_smooth(contours, iterations = 2)
+mesh = triangulate(smoothed_contours)
+
+Use a denser render grid than the gameplay grid.
+
+Example:
+
+Gameplay grid:
+1 logical cell
+
+Render field:
+4x4 or 8x8 samples per logical cell
+
+This allows tunnels and caverns to have subtle organic curves.
+
+Tunnel Smoothing
+
+When a tunnel is excavated:
+
+Mark logical cells as open.
+Add a rounded capsule-shaped subtraction to the visual density field.
+Blend neighboring excavations.
+Regenerate only the affected terrain chunk.
+
+For a path segment between points A and B:
+
+distance_to_segment = distance(sample_position, segment(A, B))
+tunnel_density_subtraction =
+    smoothstep(tunnel_radius, tunnel_radius - softness, distance_to_segment)
+
+This creates beautiful rounded tunnel walls.
+
+21. Pastel Terrain Coloring
+
+Use a depth- and material-based palette.
+
+Each geological layer should have:
+
+Base color
+Light color
+Shadow color
+Speckle color
+Rare accent color
+
+Example palette families:
+
+Surface soil:
+Warm cream, tan, pale brown
+
+Sedimentary layer:
+Peach, sand, soft orange
+
+Iron layer:
+Muted blue-gray
+
+Copper layer:
+Soft terracotta
+
+Salt layer:
+Off-white, pale lavender
+
+Crystal layer:
+Muted purple and pink
+
+Uranium layer:
+Soft moss green
+
+Deep volcanic layer:
+Charcoal, muted red, dark plum
+
+Avoid fully saturated terrain colors. Reserve strong saturation for:
+
+Resources
+Vehicles
+Active routes
+Warnings
+Power links
+Color Variation
+final_color =
+    base_material_color
+    + depth_tint
+    + noise_tint
+    + slope_light
+    + ambient_occlusion
+
+Noise tint should be subtle.
+
+variation = noise(world_position * 0.05) * 0.025
+22. Subtle Slopes and Layered Shapes
+
+The terrain should have broad, soft, irregular bands.
+
+Generate decorative inner contours offset from the main terrain boundary.
+
+For each terrain chunk:
+
+Generate outer contour.
+Create one or two inset contour bands.
+Apply slightly lighter or darker pastel fills.
+Add sparse stone dots or rounded rock decals.
+Avoid dense texture.
+
+This creates the softly layered earth seen in the concept images.
+
+Possible visual layers:
+
+Outer terrain fill
+Broad geological band
+Subtle edge highlight
+Inner shadow near excavated cavern
+Sparse speckle decals
+Occasional rock shape
+23. Terrain Chunking
+
+The world must be infinite or effectively infinite.
+
+Divide the grid into chunks.
+
+Example:
+
+Chunk size:
+32 x 32 x 4 logical cells
+
+Each chunk stores:
+
+Cell data
+Resource deposits
+Terrain seed
+Visual mesh
+Excavation state
+Built structures
+Route graph fragments
+
+Load chunks near:
+
+Current camera plane
+Visible neighboring planes
+Active transport routes
+Matrix overview
+
+Do not render every plane at full detail simultaneously.
+
+24. Deterministic Generation
+
+Every sector should be generated from:
+
+world_seed
+chunk_coordinate
+generation_version
+
+Example:
+
+chunk_seed = hash(world_seed, chunk_x, chunk_y, chunk_z, generation_version)
+
+Save only modifications where possible:
+
+Excavated cells
+Depleted resources
+Built structures
+Discovered regions
+Player routes
+Hazard changes
+
+Unmodified terrain can be regenerated from the seed.
+
+25. Puzzle Region Generation
+
+Pure noise will not create satisfying puzzles.
+
+Create procedural puzzle templates.
+
+Example template:
+
+Resource source:
+Copper on B2
+
+Required processor:
+Smelter on F1
+
+Restrictions:
+Aquifer blocks direct crossing
+Only two plane connectors permitted
+Existing iron route occupies central corridor
+
+Possible solutions:
+Route deeper through B3
+Share an existing lift
+Construct a longer path around the water
+Move the smelter
+
+A puzzle template should define:
+
+PuzzleTemplate
+{
+    ResourceRequirement[] resources;
+    TerrainConstraint[] constraints;
+    RouteConstraint[] routeConstraints;
+    FacilityConstraint[] facilities;
+
+    int expectedDifficulty;
+    int minimumTransfers;
+    int maximumCriticalConnectors;
+
+    SolutionHeuristic[] validationRules;
+}
+
+The generator should verify that a valid path exists before accepting the region.
+
+26. Procedural Puzzle Validation
+
+Before presenting a generated region:
+
+Build a simplified traversability graph.
+Place required sources and destinations.
+Run pathfinding under construction restrictions.
+Confirm at least one valid solution.
+Estimate the best possible route cost.
+Reject trivial or impossible layouts.
+Prefer layouts with several meaningfully different solutions.
+
+Pseudo-process:
+
+for attempt in 1..MAX_ATTEMPTS:
+    region = generate_region(seed + attempt)
+    graph = build_candidate_construction_graph(region)
+
+    solutions = find_k_reasonable_paths(graph, source, destination, k = 4)
+
+    if solutions.count >= 2
+       and solutions[0].cost > minimum_complexity
+       and solutions[0].cost < maximum_complexity:
+        accept(region)
+27. Resource Deposit Shapes
+
+Deposits should not be placed as single square cells.
+
+Generate them as soft blobs or veins.
+
+Blob Deposits
+
+Suitable for:
+
+Coal
+Iron
+Salt
+Clay
+Sand
+deposit_density =
+    noise3D(position * scale)
+    + radial_falloff(center, radius)
+Vein Deposits
+
+Suitable for:
+
+Gold
+Copper
+Uranium
+Crystal
+
+Generate a spline through the terrain.
+
+Stamp resource density around the spline using variable radius.
+
+for point along spline:
+    radius = base_radius + noise(point) * variation
+    add_resource_sphere(point, radius)
+Fluid Pockets
+
+Suitable for:
+
+Water
+Oil
+Brine
+
+Generate enclosed basins or porous formations.
+
+The visible sprite for a deposit can be placed over the procedural terrain as a readable gameplay marker.
+
+28. Using the Generated Sprite Sheets
+
+The provided sprites should be imported as atlases or separated assets.
+
+Suggested categories:
+
+Sheet 1:
+Tunnels, junctions, connectors, lifts, depots, utility pieces
+
+Sheet 2:
+Resources, deposits, terrain objects, liquids, hazards
+
+Sheet 3:
+Mine carts, trucks, drones, conveyors, pipes, logistics hardware
+
+Sheet 4:
+Factories, processors, storage, generators, power infrastructure
+
+Sheet 5:
+UI icons, resource icons, warnings, build tools, plane controls
+Sprite Processing
+
+The neon pink background should be removed during asset import.
+
+Use a chroma-key shader or preprocessing script.
+
+Recommended preprocessing:
+
+for each pixel:
+    if color_distance(pixel.rgb, neon_pink) < threshold:
+        pixel.alpha = 0
+
+Use a small edge-spill correction to prevent pink halos.
+
+if alpha is partially transparent:
+    replace pink-contaminated RGB with nearest opaque neighbor color
+
+Then:
+
+Trim transparent margins
+Preserve consistent pivot points
+Create metadata files
+Group sprites by category
+Generate thumbnails
+Use nearest or linear filtering based on source quality
+
+Because the sprites are painterly and smooth rather than strict pixel art, use bilinear filtering.
+
+Consistent Scale
+
+Define an asset scale standard.
+
+Example:
+
+Small icon:
+32–48 px visual size
+
+Cart:
+40–64 px
+
+Route node:
+64–96 px
+
+Factory:
+96–160 px
+
+Large hub:
+160–220 px
+
+Normalize assets at import so buildings do not appear randomly sized.
+
+29. Sprite Metadata
+
+Each sprite should have metadata.
+
+{
+  "id": "processor_iron_smelter_01",
+  "category": "processor",
+  "resourceType": "iron",
+  "footprint": [2, 2],
+  "ports": [
+    {
+      "type": "solid_input",
+      "side": "left",
+      "offset": [0, 1]
+    },
+    {
+      "type": "solid_output",
+      "side": "right",
+      "offset": [2, 1]
+    },
+    {
+      "type": "power",
+      "side": "bottom",
+      "offset": [1, 2]
+    }
+  ],
+  "pivot": [0.5, 0.9]
+}
+
+The code should never infer gameplay behavior from the artwork itself.
+
+30. Rendering Routes
+
+Routes should appear as clean rounded lines.
+
+Use spline-based rendering rather than rectangular tiles where possible.
+
+Each route should have:
+
+Base stroke
+Inner colored stroke
+Edge highlight
+Direction indicators
+Moving cargo
+Optional congestion glow
+
+Example visual stack:
+
+Outer tunnel rim
+Dark interior
+Colored center lane
+Small animated cart
+Subtle route direction markers
+
+Use the route segment sprites for junctions and special connectors while generating long paths procedurally.
+
+This avoids requiring thousands of pre-rendered route combinations.
+
+31. Construction Interface
+
+Build mode should be simple.
+
+Select a tool.
+Click or drag a route.
+Preview cost and validity.
+Confirm construction.
+Route gradually becomes operational.
+
+Tools:
+
+Dig tunnel
+Place cart route
+Place conveyor
+Place pipe
+Place junction
+Place lift
+Place plane connector
+Place transfer node
+Place miner
+Place processor
+Place storage
+Place power infrastructure
+Remove
+Upgrade
+Set route direction
+Set cargo filter
+
+The preview should display:
+
+Construction cost
+Route length
+Expected travel time
+Required excavation
+Plane changes
+Estimated throughput
+Conflicts
+Invalid cells
+32. Route Drawing
+
+Use drag-to-draw.
+
+The path should snap to a logical grid but render smoothly.
+
+During drawing:
+
+raw_path = cells_under_cursor_drag
+simplified_path = remove_collinear_points(raw_path)
+smoothed_preview = generate_rounded_polyline(simplified_path)
+
+Allow:
+
+Straight segments
+Rounded corners
+Automatic junction creation
+Route replacement
+Branch drawing from existing nodes
+Cross-plane endpoint selection
+
+Holding a modifier key may enable:
+
+Force shortest path
+Force low-excavation path
+Force low-congestion path
+Avoid existing routes
+33. Cross-Plane Construction
+
+When the player places a plane connector:
+
+Show the current plane.
+Display neighboring plane targets.
+Highlight legal destination cells.
+Allow selecting a target plane.
+Create linked connector nodes.
+Add a cross-plane graph edge.
+
+Example:
+
+PlaneConnection
+{
+    NodeId entryNode;
+    NodeId exitNode;
+    int planeDelta;
+    float travelTime;
+    float capacity;
+    float powerCost;
+}
+
+Cross-plane links should be expensive enough to matter but common enough to define the game.
+
+34. 3D Matrix Overview
+
+The matrix view should display:
+
+Translucent plane sheets
+Active routes
+Facilities
+Transfer shafts
+Resource networks
+Selected plane
+Warnings
+Congestion
+Throughput
+
+Do not render full terrain detail on every sheet.
+
+Use simplified plane representations:
+
+Soft translucent rectangle
+Route splines
+Simplified building sprites or icons
+Glowing connectors
+Resource-colored networks
+
+Controls:
+
+Rotate overview
+Pan
+Zoom
+Click plane to open
+Click network to isolate
+Hide terrain
+Hide inactive networks
+Show congestion heatmap
+Show resource flow
+Show power network
+35. Power System
+
+Power should be a meaningful infrastructure layer, but not another full electrical engineering simulator.
+
+Sources:
+
+Diesel generator
+Coal generator
+Gas generator
+Solar
+Wind
+Geothermal
+Nuclear
+Battery bank
+
+Consumers:
+
+Miners
+Pumps
+Lifts
+Plane connectors
+Processors
+Storage cooling
+Water treatment
+
+Power may travel through:
+
+Local cables
+Power nodes
+Vertical substations
+Cross-plane relays
+
+Power shortages should reduce throughput rather than instantly shut down the entire base.
+
+36. Progression
+
+Unlock new systems gradually.
+
+Phase 1: Single-Plane Routing
+Stone
+Coal
+Iron
+Basic carts
+Storage
+Basic processing
+Phase 2: Vertical Routing
+Depth lifts
+Water
+Pumps
+Power grid
+Copper
+Phase 3: Parallel Planes
+Plane connectors
+Shared hubs
+Congestion
+Oil and salt
+Phase 4: Full Matrix
+Side-axis views
+Multi-plane factories
+Advanced filters
+Uranium
+Crystal
+High-capacity trunk lines
+Phase 5: Megaprojects
+Huge contracts
+Deep-region hazards
+Long-distance delivery
+Multi-resource industrial chains
+Network optimization challenges
+37. Objectives
+
+Examples:
+
+Deliver 100 iron per minute.
+Connect three copper deposits using only one plane connector.
+Maintain 90% delivery reliability.
+Produce fuel without disturbing an aquifer.
+Supply two factories from one shared trunk line.
+Reduce average gold transport time below 40 seconds.
+Move uranium through no more than two populated planes.
+Construct a route with fewer than five junctions.
+Reach a depth of 2,000 meters.
+Operate continuously during a power shortage.
+
+Optional objectives should reward elegant solutions.
+
+38. Failure and Pressure
+
+Avoid traditional game-over states.
+
+Use recoverable problems:
+
+Congestion
+Resource starvation
+Power instability
+Flooding
+Route collapse
+Processor backlog
+Missed contract bonuses
+Maintenance cost
+Pollution restrictions
+
+The player should be encouraged to redesign rather than restart.
+
+39. Recommended Technical Architecture
+
+Use a data-driven architecture.
+
+WorldSimulation
+ ├── ChunkManager
+ ├── TerrainGenerator
+ ├── ResourceGenerator
+ ├── PuzzleRegionGenerator
+ ├── ExcavationSystem
+ ├── StructureSystem
+ ├── RouteGraphSystem
+ ├── CargoSimulation
+ ├── ProcessingSystem
+ ├── PowerSystem
+ ├── ObjectiveSystem
+ └── SaveSystem
+
+Presentation
+ ├── PlaneRenderer
+ ├── TerrainMeshRenderer
+ ├── RouteRenderer
+ ├── CargoRenderer
+ ├── StructureRenderer
+ ├── MatrixOverviewRenderer
+ └── UIController
+
+Keep simulation independent of rendering.
+
+The game should be able to simulate cargo without every object being visible.
+
+40. Engine Recommendation
+
+Godot is a strong choice for an AI-assisted implementation because:
+
+Good 2D tools
+Accessible procedural mesh APIs
+Resource-based data architecture
+Easy custom editor tooling
+Good support for shaders and splines
+Lightweight project structure
+
+Unity is also suitable, particularly if the developer already prefers C#.
+
+For a first implementation, use:
+
+2D plane scenes
+A logical 3D grid
+A separate 3D overview scene
+Procedurally generated 2D terrain meshes
+Graph-based cargo movement
+
+Do not begin by building the entire game as a fully 3D voxel world.
+
+41. Suggested Godot Project Structure
+res://
+  assets/
+    sprites/
+      networks/
+      resources/
+      vehicles/
+      machines/
+      ui/
+    palettes/
+    shaders/
+
+  data/
+    resources/
+    buildings/
+    recipes/
+    terrain/
+    puzzle_templates/
+
+  scenes/
+    world/
+    plane_view/
+    matrix_view/
+    structures/
+    vehicles/
+    ui/
+
+  scripts/
+    world/
+    terrain/
+    routing/
+    cargo/
+    factories/
+    power/
+    ui/
+    save/
+
+  shaders/
+    terrain_gradient.gdshader
+    route_glow.gdshader
+    ghost_plane.gdshader
+    chroma_cleanup.gdshader
+42. Save System
+
+Save:
+
+World seed
+Generation version
+Unlocked technology
+Modified cells
+Structures
+Routes
+Cargo buffers
+Facility states
+Objectives
+Discovered chunks
+Player preferences
+
+Use stable unique IDs rather than scene references.
+
+{
+  "worldSeed": 824711,
+  "generationVersion": 1,
+  "modifiedChunks": {},
+  "structures": [],
+  "routes": [],
+  "discoveredRegions": [],
+  "progression": {}
+}
+43. Performance Strategy
+
+Do not update every vehicle and machine every frame.
+
+Use:
+
+Fixed simulation ticks
+Route-level aggregate flow for distant networks
+Object pooling
+Chunk culling
+Cached pathfinding
+Dirty-region graph rebuilding
+Simplified matrix-view rendering
+Lower-frequency updates for offscreen planes
+
+Example:
+
+Visible active plane:
+Full vehicle animation
+
+Neighboring planes:
+Reduced animation rate
+
+Distant planes:
+Aggregate throughput simulation only
+44. Minimum Viable Product
+
+The first playable version should contain:
+
+One persistent world seed
+Five parallel planes
+One slicing orientation
+Iron, coal, copper, and water
+Basic miners and pumps
+Cart tunnels
+Pipes
+Junctions
+Lifts
+Plane connectors
+Storage
+Smelter
+Water processor
+Basic power
+Congestion
+One matrix overview
+Procedural pastel terrain
+Three puzzle-region templates
+Save and load
+
+Do not include uranium, oil refining, drones, or twenty factory types in the first milestone.
+
+45. MVP Milestones
+Milestone 1: Terrain and Plane Navigation
+Logical 3D grid
+Procedural chunks
+Smooth 2D terrain mesh
+Plane switching
+Camera controls
+Basic excavation
+Milestone 2: Route Construction
+Draw tunnels
+Add junctions
+Add cross-plane connectors
+Build route graph
+Validate paths
+Milestone 3: Material Flow
+Place resource deposits
+Place miners
+Spawn cargo
+Move carts
+Deliver to storage
+Milestone 4: Processing
+Add smelter
+Add recipes
+Add output routing
+Add buffers
+Add power
+Milestone 5: Puzzle Generation
+Add restrictions
+Add objectives
+Validate procedural layouts
+Add scoring
+Milestone 6: Visual Polish
+Use provided sprites
+Pastel terrain gradients
+Animated carts
+Ghost planes
+Matrix overview
+Sound and feedback
+46. AI Coding Rules
+
+The coding LLM should follow these rules:
+
+Build small working systems before adding content.
+Keep all resource and machine definitions data-driven.
+Do not hardcode individual resources into route logic.
+Keep terrain simulation separate from terrain rendering.
+Keep route graph simulation separate from sprite animation.
+Write deterministic generation tests.
+Add debug visualization for every procedural system.
+Add route graph inspection tools.
+Add a button to regenerate the current puzzle region.
+Add a button to visualize pathfinding costs.
+Avoid premature multiplayer support.
+Avoid realistic physics for carts.
+Avoid full voxel rendering in the normal plane view.
+Preserve save compatibility through versioned data.
+47. Required Debug Modes
+
+Create debug overlays for:
+
+Logical cells
+Terrain density
+Chunk boundaries
+Geological bands
+Resource density
+Valid construction cells
+Route graph nodes
+Route graph edges
+Congestion
+Cargo assignments
+Power availability
+Puzzle solvability paths
+Current plane coordinate
+Neighbor-plane connections
+
+Procedural systems are difficult to fix without visual debugging.
+
+48. Art Direction Rules
+
+All generated and sprite-based artwork must follow these principles:
+
+Rounded geometry
+Soft bevels
+Pastel base colors
+Minimal outlines
+Limited texture
+Subtle highlights
+No heavy grime
+No photorealism
+No dense industrial clutter
+No harsh black backgrounds
+Strong resource color coding
+Large readable silhouettes
+Simple icon language
+
+Terrain should remain quieter than routes and machines.
+
+The visual priority should be:
+
+1. Active warnings
+2. Cargo and routes
+3. Important facilities
+4. Resource deposits
+5. Terrain
+6. Decorative details
+49. Audio Direction
+
+Use soft, satisfying sounds:
+
+Gentle route placement clicks
+Quiet cart movement
+Soft processing hums
+Musical connector activation
+Layer-switching whoosh
+Subtle underground ambience
+Congestion warning chime
+Resource-delivery tones
+
+Avoid constant loud machinery.
+
+The soundscape should feel calm and analytical.
+
+50. Final Product Identity
+
+The finished game should not feel like a factory simulator with multiple floors.
+
+It should feel like a spatial network puzzle taking place inside a living underground cube.
+
+The defining question should always be:
+
+“What is the cleanest way to move these resources through this three-dimensional terrain?”
+
+Factories, miners, vehicles, resources, and power systems exist to create interesting routing demands.
+
+The route network is the real machine.

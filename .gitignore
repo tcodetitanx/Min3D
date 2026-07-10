@@ -1,0 +1,22 @@
+# UE generated
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+Packaged/
+Build/
+.vs/
+*.sln
+*.slnx
+*.VC.db
+*.opensdf
+*.opendb
+*.sdf
+*.suo
+*.xcodeproj
+*.xcworkspace
+
+# secrets - never commit keys
+keys/
+*.pem
+*key*.txt
