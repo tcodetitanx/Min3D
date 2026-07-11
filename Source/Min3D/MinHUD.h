@@ -8,7 +8,7 @@
 class AMinPlayerController;
 class UTexture2D;
 
-// In-game HUD: resource bar, plane tabs, tool palette, contract panel, toasts.
+// In-game HUD: score, segment stock, plane tabs, tools, warnings, game over.
 class SMinHUD : public SCompoundWidget
 {
 public:
@@ -22,15 +22,15 @@ private:
 	TArray<TSharedPtr<FSlateBrush>> Brushes; // keep icon brushes alive
 	TSharedPtr<FSlateBrush> MakeIconBrush(const FString& SpriteId, float Size);
 
-	TSharedRef<SWidget> BuildResourceBar();
+	TSharedRef<SWidget> BuildScorePanel();
 	TSharedRef<SWidget> BuildPlaneTabs();
+	TSharedRef<SWidget> BuildRightPanel();
 	TSharedRef<SWidget> BuildToolbar();
-	TSharedRef<SWidget> BuildContractPanel();
 	TSharedRef<SWidget> BuildStatusArea();
-	TSharedRef<SWidget> BuildTutorialPanel();
+	TSharedRef<SWidget> BuildGameOverOverlay();
 };
 
-// Title screen overlay.
+// Title screen overlay with mode selection.
 class SMinTitle : public SCompoundWidget
 {
 public:

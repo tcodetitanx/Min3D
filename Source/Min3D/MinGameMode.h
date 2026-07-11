@@ -22,6 +22,9 @@ public:
 	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaSeconds) override;
 
+	// starts the actual run (called from the title screen or immediately on restarts)
+	void BeginRun(EMinGameRules Rules);
+
 	AMinPlaneActor* GetPlaneActor(int32 P) const { return PlaneActors.IsValidIndex(P) ? PlaneActors[P] : nullptr; }
 	void UpdatePlaneVisibility();
 
@@ -33,25 +36,12 @@ public:
 
 	bool bGhostPlanes = true;
 
-	// interactive tutorial (-1 = inactive)
-	int32 TutStep = -1;
-	FString TutTitle, TutText;
-	bool bTutFinal = false;
-	void TutorialNext();
-	void TutorialSkip();
-
 private:
 	void RunAutoBuild();
-	void SetTutStep(int32 Step);
-	void TickTutorial(float DeltaSeconds);
-	int32 TutBaselineEdges = 0;
-	float TutPulse = 0.f;
-	FIntVector TutTarget = FIntVector(-1, -1, -1);
-	UPROPERTY() TObjectPtr<AActor> TutMarkerActor;
-	UPROPERTY() TObjectPtr<class UStaticMeshComponent> TutMarker;
+	void SpawnBackdrops();
+	float MarkerRefreshT = 0.f;
 
 	// headless smoke-test hooks
-	float AutoShotAt = -1.f;
 	float AutoQuitAt = -1.f;
 	float RunTime = 0.f;
 	float HeartbeatAt = 0.f;

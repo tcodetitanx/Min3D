@@ -6,7 +6,8 @@
 
 class UCameraComponent;
 
-// Camera rig: orthographic plane view / perspective matrix overview.
+// Camera rig: orthographic front view, orthographic side view (perpendicular
+// planes), and a perspective matrix overview of the whole lattice.
 UCLASS()
 class AMinPawn : public APawn
 {
@@ -17,17 +18,26 @@ public:
 
 	UPROPERTY() TObjectPtr<UCameraComponent> Camera;
 
-	// plane-view state
-	FVector2D PanCenter = FVector2D(4800.f, -2400.f); // world X, Z
+	// plane-view state. PanCenter.X runs along the screen-right axis of the
+	// current orientation (world X in front view, world Y in side view);
+	// PanCenter.Y is world Z.
+	FVector2D PanCenter = FVector2D(4500.f, -2500.f);
 	float OrthoWidth = 7000.f;
-	int32 ViewPlane = 4;
+	bool bSideView = false;
+	int32 ViewFront = 1;  // 0..2
+	int32 ViewSide = 1;   // 0..2
 	bool bMatrixView = false;
 	float MatrixYaw = -38.f;
 	float MatrixPitch = -22.f;
 
+	// current plane index in the global 0..5 numbering
+	int32 CurrentPlane() const;
+	void ClampPan();
+
 	void UpdateCamera(float DeltaSeconds);
 
 private:
-	float PlaneYCur = 0.f; // smoothed camera plane Y
+	FVector LocCur = FVector::ZeroVector;
+	float YawCur = -90.f;
 	bool bSnapped = false;
 };

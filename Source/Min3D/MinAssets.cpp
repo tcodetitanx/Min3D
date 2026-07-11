@@ -19,7 +19,8 @@ void UMinAssets::Initialize(FSubsystemCollectionBase& Collection)
 	SpriteDir = FPaths::ProjectContentDir() / TEXT("SpriteSrc");
 	SpriteMat = LoadObject<UMaterial>(nullptr, TEXT("/Game/Gen/M_MinSprite.M_MinSprite"));
 	VertexMat = LoadObject<UMaterial>(nullptr, TEXT("/Game/Gen/M_MinVertex.M_MinVertex"));
-	if (!SpriteMat || !VertexMat)
+	TerrainMat = LoadObject<UMaterial>(nullptr, TEXT("/Game/Gen/M_MinTerrain.M_MinTerrain"));
+	if (!SpriteMat || !VertexMat || !TerrainMat)
 	{
 		UE_LOG(LogMin, Error, TEXT("Parent materials missing - run Tools/bootstrap_content.py"));
 	}

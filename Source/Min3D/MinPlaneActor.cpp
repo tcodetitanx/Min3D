@@ -12,11 +12,10 @@
 
 namespace
 {
-	// local-space point of a cell center on this plane's meshes
-	FORCEINLINE FVector CellPt(const FIntVector& C)
+	// plane-local point of a cell center
+	FORCEINLINE FVector CellPt(int32 U, int32 V, float Depth = 0.f)
 	{
-		return FVector(C.X * Min::CellSize + Min::CellSize * 0.5f, 0.f,
-			-(C.Y * Min::CellSize + Min::CellSize * 0.5f));
+		return FVector((U + 0.5f) * Min::CellSize, Depth, -((V + 0.5f) * Min::CellSize));
 	}
 
 	struct FMeshAccum
@@ -45,7 +44,14 @@ namespace
 			T.Append({ I, I + 2, I + 1, I, I + 3, I + 2 });
 		}
 
-		// thick line segment in the XZ plane
+		// axis-aligned square centered at P
+		void Box(const FVector& P, float Half, const FColor& Col)
+		{
+			Quad(P + FVector(-Half, 0, -Half), P + FVector(Half, 0, -Half),
+				P + FVector(Half, 0, Half), P + FVector(-Half, 0, Half), Col);
+		}
+
+		// thick line segment in the local XZ plane
 		void Strip(const FVector& P0, const FVector& P1, float HalfW, const FColor& Col)
 		{
 			FVector Dir = P1 - P0; Dir.Y = 0.f;
@@ -54,7 +60,7 @@ namespace
 			Quad(P0 - Side, P1 - Side, P1 + Side, P0 + Side, Col);
 		}
 
-		void Disc(const FVector& Center, float Radius, const FColor& ColIn, int32 Segs = 10)
+		void Disc(const FVector& Center, float Radius, const FColor& ColIn, int32 Segs = 12)
 		{
 			const FColor Col = Enc(ColIn);
 			const int32 CI = V.Num();
@@ -68,47 +74,24 @@ namespace
 			}
 		}
 
-		// polyline with rounded joints: straight strips + discs at bends/ends
-		void Polyline(const TArray<FVector>& Pts, float HalfW, const FColor& Col)
+		// partial ring, clockwise from 12 o'clock; Frac in 0..1
+		void Arc(const FVector& Center, float R0, float R1, float Frac, const FColor& ColIn, int32 Segs = 24)
 		{
-			for (int32 I = 0; I + 1 < Pts.Num(); ++I) Strip(Pts[I], Pts[I + 1], HalfW, Col);
-			for (int32 I = 0; I < Pts.Num(); ++I)
+			const FColor Col = Enc(ColIn);
+			const int32 NSeg = FMath::Clamp(FMath::CeilToInt(Segs * Frac), 1, Segs);
+			for (int32 S = 0; S < NSeg; ++S)
 			{
-				const bool bEnd = I == 0 || I == Pts.Num() - 1;
-				bool bBend = false;
-				if (!bEnd)
-				{
-					const FVector D0 = (Pts[I] - Pts[I - 1]).GetSafeNormal();
-					const FVector D1 = (Pts[I + 1] - Pts[I]).GetSafeNormal();
-					bBend = !D0.Equals(D1, 0.01f);
-				}
-				if (bEnd || bBend) Disc(Pts[I], HalfW, Col);
+				const float A0 = PI * 0.5f - 2.f * PI * Frac * S / NSeg;
+				const float A1 = PI * 0.5f - 2.f * PI * Frac * (S + 1) / NSeg;
+				const FVector D0(FMath::Cos(A0), 0.f, FMath::Sin(A0));
+				const FVector D1(FMath::Cos(A1), 0.f, FMath::Sin(A1));
+				Quad(Center + D0 * R0, Center + D1 * R0, Center + D1 * R1, Center + D0 * R1, ColIn);
 			}
 		}
 	};
 
-	TArray<FVector> PathToPoints(const TArray<FIntVector>& Path)
-	{
-		// compress collinear runs so long straights are single strips
-		TArray<FVector> Pts;
-		for (int32 I = 0; I < Path.Num(); ++I)
-		{
-			if (I > 0 && I + 1 < Path.Num())
-			{
-				const FIntVector D0 = Path[I] - Path[I - 1];
-				const FIntVector D1 = Path[I + 1] - Path[I];
-				if (D0 == D1) continue;
-			}
-			Pts.Add(CellPt(Path[I]));
-		}
-		return Pts;
-	}
-}
-
-namespace
-{
 	struct FPal { FColor Base; FColor Deep; };
-	// pastel terrain palette: Base at surface, Deep at bottom of the world
+	// pastel terrain palette: Base near the surface, Deep at the bottom
 	FPal Palette(EMinTerrain T)
 	{
 		switch (T)
@@ -119,9 +102,13 @@ namespace
 		case EMinTerrain::Clay:      return { FColor(217, 169, 126), FColor(196, 146, 106) };
 		case EMinTerrain::Granite:   return { FColor(154, 160, 172), FColor(132, 138, 152) };
 		case EMinTerrain::Obsidian:  return { FColor(106, 90, 112),  FColor(84, 70, 92) };
-		case EMinTerrain::Aquifer:   return { FColor(126, 196, 221), FColor(104, 172, 204) };
 		default:                     return { FColor(240, 232, 210), FColor(226, 214, 188) };
 		}
+	}
+
+	FColor Darken(const FLinearColor& C, float F)
+	{
+		return (C * F).ToFColor(true);
 	}
 }
 
@@ -137,67 +124,102 @@ void AMinPlaneActor::Init(int32 InPlane, UMinWorld* InWorld, UMinAssets* InAsset
 	World = InWorld;
 	Assets = InAssets;
 
-	const int32 W = Min::NX * Min::TexPerCell;
-	const int32 H = Min::NY * Min::TexPerCell;
-	Pixels.SetNumUninitialized(W * H);
+	// the actor transform turns plane-local space into world space:
+	// front planes sit at a fixed world Y, side planes rotate 90 degrees so
+	// their local X axis runs front-to-back along world Y
+	if (Min::IsFront(Plane))
+	{
+		SetActorLocation(FVector(0.f, Min::FrontPlaneY(Plane), 0.f));
+		SetActorRotation(FRotator::ZeroRotator);
+	}
+	else
+	{
+		SetActorLocation(FVector(Min::SidePlaneX(Plane - Min::NumFront), 0.f, 0.f));
+		SetActorRotation(FRotator(0.f, 90.f, 0.f));
+	}
 
-	TerrainTex = UTexture2D::CreateTransient(W, H, PF_B8G8R8A8);
-	TerrainTex->Filter = TF_Bilinear;
-	TerrainTex->SRGB = true;
-	TerrainTex->UpdateResource();
+	const int32 CW = Min::PlaneW(Plane), CH = Min::PlaneH(Plane);
+	const int32 W = CW * Min::TexPerCell;
+	const int32 H = CH * Min::TexPerCell;
+	TerrainPixels.SetNumUninitialized(W * H);
+	BackPixels.SetNumUninitialized(W * H);
 
-	TerrainQuad = NewObject<UStaticMeshComponent>(this);
-	TerrainQuad->SetStaticMesh(Assets->GetQuad());
-	TerrainMID = Assets->MakeTexMID(TerrainQuad, TerrainTex);
-	TerrainQuad->SetMaterial(0, TerrainMID);
-	TerrainQuad->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	TerrainQuad->SetCastShadow(false);
-	TerrainQuad->SetTranslucentSortPriority(0);
-	TerrainQuad->SetupAttachment(RootComponent);
-	TerrainQuad->RegisterComponent();
-	TerrainQuad->SetWorldLocation(FVector(Min::NX * Min::CellSize * 0.5f,
-		Plane * Min::PlaneGap + Min::DepthTerrain, -Min::NY * Min::CellSize * 0.5f));
-	TerrainQuad->SetWorldScale3D(FVector(Min::NX, 1.f, Min::NY));
+	auto MakeTex = [&]() -> UTexture2D*
+	{
+		UTexture2D* Tex = UTexture2D::CreateTransient(W, H, PF_B8G8R8A8);
+		Tex->Filter = TF_Bilinear;
+		Tex->SRGB = true;
+		Tex->UpdateResource();
+		return Tex;
+	};
+	TerrainTex = MakeTex();
+	BackTex = MakeTex();
 
-	RouteMesh = NewObject<UProceduralMeshComponent>(this);
-	RouteMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	RouteMesh->SetCastShadow(false);
-	RouteMesh->SetTranslucentSortPriority(2);
-	RouteMesh->SetupAttachment(RootComponent);
-	RouteMesh->RegisterComponent();
-	RouteMesh->SetWorldLocation(FVector(0, Plane * Min::PlaneGap + Min::DepthRoute, 0));
+	auto MakeQuad = [&](UTexture2D* Tex, UMaterial* Mat, float Depth, int32 Sort) -> TPair<UStaticMeshComponent*, UMaterialInstanceDynamic*>
+	{
+		UStaticMeshComponent* Q = NewObject<UStaticMeshComponent>(this);
+		Q->SetStaticMesh(Assets->GetQuad());
+		UMaterialInstanceDynamic* MID = UMaterialInstanceDynamic::Create(Mat, Q);
+		MID->SetTextureParameterValue(TEXT("Tex"), Tex);
+		MID->SetVectorParameterValue(TEXT("Tint"), FLinearColor::White);
+		MID->SetScalarParameterValue(TEXT("Opacity"), 1.f);
+		Q->SetMaterial(0, MID);
+		Q->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		Q->SetCastShadow(false);
+		Q->SetTranslucentSortPriority(Sort);
+		Q->SetupAttachment(RootComponent);
+		Q->RegisterComponent();
+		Q->SetRelativeLocation(FVector(CW * Min::CellSize * 0.5f, Depth, -CH * Min::CellSize * 0.5f));
+		Q->SetRelativeScale3D(FVector(CW * Min::CellSize / 100.f, 1.f, CH * Min::CellSize / 100.f));
+		return { Q, MID };
+	};
+	auto Back = MakeQuad(BackTex, Assets->GetSpriteMaterial(), Min::DepthBack, -1);
+	BackQuad = Back.Key; BackMID = Back.Value;
+	auto Terr = MakeQuad(TerrainTex, Assets->GetTerrainMaterial(), Min::DepthTerrain, 0);
+	TerrainQuad = Terr.Key; TerrainMID = Terr.Value;
 
-	GhostRouteMesh = NewObject<UProceduralMeshComponent>(this);
-	GhostRouteMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	GhostRouteMesh->SetCastShadow(false);
-	GhostRouteMesh->SetTranslucentSortPriority(2);
-	GhostRouteMesh->SetupAttachment(RootComponent);
-	GhostRouteMesh->RegisterComponent();
-	GhostRouteMesh->SetWorldLocation(FVector(0, Plane * Min::PlaneGap + Min::DepthRoute, 0));
+	auto MakeProcMesh = [&](float Depth, int32 Sort) -> UProceduralMeshComponent*
+	{
+		UProceduralMeshComponent* M = NewObject<UProceduralMeshComponent>(this);
+		M->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		M->SetCastShadow(false);
+		M->SetTranslucentSortPriority(Sort);
+		M->SetupAttachment(RootComponent);
+		M->RegisterComponent();
+		M->SetRelativeLocation(FVector(0.f, Depth, 0.f));
+		return M;
+	};
+	RouteMesh = MakeProcMesh(Min::DepthRoute, 2);
+	MarkerMesh = MakeProcMesh(Min::DepthMarker, 3);
+	GhostRouteMesh = MakeProcMesh(Min::DepthFX, 6);
 
-	RebuildTerrainTexture(FIntRect(0, 0, Min::NX, Min::NY));
-	RefreshDepositMarkers();
+	RouteMID = UMaterialInstanceDynamic::Create(Assets->GetVertexMaterial(), this);
+	RouteMesh->SetMaterial(0, RouteMID);
+	MarkerMID = UMaterialInstanceDynamic::Create(Assets->GetVertexMaterial(), this);
+	MarkerMesh->SetMaterial(0, MarkerMID);
+	PreviewMID = UMaterialInstanceDynamic::Create(Assets->GetVertexMaterial(), this);
+	GhostRouteMesh->SetMaterial(0, PreviewMID);
+
+	RebuildTerrainTexture(FIntRect(0, 0, CW, CH));
 }
 
-FColor AMinPlaneActor::ShadePixel(float CX, float CY) const
+void AMinPlaneActor::ShadePixel(float CU, float CV, FColor& OutSolid, FColor& OutBack) const
 {
-	const float Density = World->VisualDensity(CX, CY, Plane);
-	const float DepthT = FMath::Clamp(CY / float(Min::NY), 0.f, 1.f);
+	const float Density = World->VisualDensity(Plane, CU, CV);
+	const float DepthT = FMath::Clamp(CV / float(Min::PlaneH(Plane)), 0.f, 1.f);
 
-	const int32 IX = FMath::Clamp(FMath::FloorToInt(CX), 0, Min::NX - 1);
-	const int32 IY = FMath::Clamp(FMath::FloorToInt(CY), 0, Min::NY - 1);
-	const FMinCell& Cell = World->Cell(IX, IY, Plane);
+	const int32 IU = FMath::Clamp(FMath::FloorToInt(CU), 0, Min::PlaneW(Plane) - 1);
+	const int32 IV = FMath::Clamp(FMath::FloorToInt(CV), 0, Min::PlaneH(Plane) - 1);
+	const FMinCell& Cell = World->PlaneCell(Plane, IU, IV);
 
-	const float Solidness = FMath::SmoothStep(0.44f, 0.56f, Density);
-
-	// open-space color: sky above the surface, warm cave interior below
+	// ---- open-space color: sky above the surface, warm cave interior below
 	FLinearColor Open;
 	if (Cell.Terrain == EMinTerrain::Sky)
 	{
-		const float T = FMath::Clamp(CY / float(Min::SkyRows + 2), 0.f, 1.f);
+		const float T = FMath::Clamp(CV / float(Min::SkyRows + 2), 0.f, 1.f);
 		Open = FLinearColor::LerpUsingHSV(
 			FLinearColor(0.78f, 0.90f, 0.88f), FLinearColor(0.94f, 0.91f, 0.82f), T);
-		const float Cl = UMinWorld::Fbm(CX * 0.10f, CY * 0.28f + Plane * 3.1f, World->WorldSeed + 5, 3);
+		const float Cl = UMinWorld::Fbm(CU * 0.10f, CV * 0.28f + Plane * 3.1f, World->WorldSeed + 5, 3);
 		if (Cl > 0.62f) Open = FLinearColor::LerpUsingHSV(Open, FLinearColor(0.99f, 0.99f, 0.97f),
 			FMath::Min(1.f, (Cl - 0.62f) * 6.f));
 	}
@@ -205,52 +227,41 @@ FColor AMinPlaneActor::ShadePixel(float CX, float CY) const
 	{
 		Open = FLinearColor::LerpUsingHSV(
 			FLinearColor(0.952f, 0.925f, 0.850f), FLinearColor(0.828f, 0.776f, 0.678f), DepthT * 0.9f);
-		const float WallShadow = FMath::Clamp((Density - 0.26f) / 0.24f, 0.f, 1.f);
+		const float WallShadow = FMath::Clamp((Density - 0.20f) / 0.30f, 0.f, 1.f);
 		Open *= (1.f - WallShadow * 0.13f);
 	}
-	if (Solidness <= 0.f) return Open.ToFColor(true);
+	OutBack = Open.ToFColor(true);
+	OutBack.A = 255;
 
-	// solid terrain
+	// ---- solid terrain color (computed everywhere; masked by density alpha)
 	const FPal P = Palette(Cell.Terrain);
 	FLinearColor C = FLinearColor::LerpUsingHSV(FLinearColor(P.Base), FLinearColor(P.Deep), DepthT);
 
 	// subtle color variation
-	const float N = UMinWorld::ValueNoise(CX * 0.35f, CY * 0.35f, World->WorldSeed + Plane * 3 + 9);
-	C *= (0.97f + N * 0.06f);
+	const float NV = UMinWorld::ValueNoise(CU * 0.55f, CV * 0.55f, World->WorldSeed + Plane * 3 + 9);
+	C *= (0.97f + NV * 0.06f);
 
 	// soft bevel highlight along open boundaries
 	const float Edge = FMath::Clamp((0.68f - Density) / 0.18f, 0.f, 1.f);
-	if (Edge > 0.f) C = FLinearColor::LerpUsingHSV(C, FLinearColor(1.f, 0.98f, 0.92f), Edge * 0.35f);
+	if (Edge > 0.f) C = FLinearColor::LerpUsingHSV(C, FLinearColor(1.f, 0.98f, 0.92f), Edge * 0.30f);
 
 	// sparse speckles
-	const float Spk = UMinWorld::Hash01(FMath::FloorToInt(CX * 3.f), FMath::FloorToInt(CY * 3.f),
+	const float Spk = UMinWorld::Hash01(FMath::FloorToInt(CU * 4.f), FMath::FloorToInt(CV * 4.f),
 		World->WorldSeed + Plane * 17 + 33);
 	if (Spk > 0.985f) C *= 0.90f;
 	else if (Spk < 0.008f) C = FLinearColor::LerpUsingHSV(C, FLinearColor::White, 0.25f);
 
-	// resource tint blobs so deposits read in the terrain itself
-	if (Cell.Resource != EMinResource::None && !Cell.bExcavated)
-	{
-		const FLinearColor RC = MinResInfo(Cell.Resource).Color;
-		const float Blob = UMinWorld::ValueNoise(CX * 1.3f, CY * 1.3f, World->WorldSeed + 77);
-		C = FLinearColor::LerpUsingHSV(C, RC, 0.18f + 0.20f * Blob);
-	}
-
-	// aquifer shimmer
-	if (Cell.Terrain == EMinTerrain::Aquifer)
-	{
-		const float Sh = UMinWorld::ValueNoise(CX * 0.8f, CY * 0.8f + 11.f, World->WorldSeed + 3);
-		C = FLinearColor::LerpUsingHSV(C, FLinearColor(0.6f, 0.85f, 0.95f), Sh * 0.3f);
-	}
-	if (Solidness < 1.f) C = FMath::Lerp(Open, C, Solidness);
-	return C.ToFColor(true);
+	OutSolid = C.ToFColor(true);
+	// alpha carries the density field; the terrain material cuts a crisp,
+	// anti-aliased edge at 0.5 whatever the zoom
+	OutSolid.A = (uint8)FMath::Clamp(FMath::RoundToInt(Density * 255.f), 0, 255);
 }
 
 void AMinPlaneActor::RebuildTerrainTexture(const FIntRect& CellRect)
 {
 	if (!TerrainTex || !World) return;
-	const int32 W = Min::NX * Min::TexPerCell;
-	const int32 H = Min::NY * Min::TexPerCell;
+	const int32 W = Min::PlaneW(Plane) * Min::TexPerCell;
+	const int32 H = Min::PlaneH(Plane) * Min::TexPerCell;
 	const int32 PX0 = FMath::Clamp(CellRect.Min.X * Min::TexPerCell, 0, W);
 	const int32 PY0 = FMath::Clamp(CellRect.Min.Y * Min::TexPerCell, 0, H);
 	const int32 PX1 = FMath::Clamp(CellRect.Max.X * Min::TexPerCell, 0, W);
@@ -261,111 +272,66 @@ void AMinPlaneActor::RebuildTerrainTexture(const FIntRect& CellRect)
 	ParallelFor(PY1 - PY0, [&](int32 Row)
 	{
 		const int32 PY = PY0 + Row;
-		FColor* Line = Pixels.GetData() + PY * W;
+		FColor* SolidLine = TerrainPixels.GetData() + PY * W;
+		FColor* BackLine = BackPixels.GetData() + PY * W;
 		for (int32 PX = PX0; PX < PX1; ++PX)
-		{
-			Line[PX] = ShadePixel((PX + 0.5f) * Inv, (PY + 0.5f) * Inv);
-			Line[PX].A = 255;
-		}
+			ShadePixel((PX + 0.5f) * Inv, (PY + 0.5f) * Inv, SolidLine[PX], BackLine[PX]);
 	});
 
-	// upload the dirty region
-	FUpdateTextureRegion2D* Region = new FUpdateTextureRegion2D(PX0, PY0, PX0, PY0, PX1 - PX0, PY1 - PY0);
-	TerrainTex->UpdateTextureRegions(0, 1, Region, W * 4, 4,
-		reinterpret_cast<uint8*>(Pixels.GetData()),
-		[](uint8*, const FUpdateTextureRegion2D* R) { delete R; });
-}
-
-void AMinPlaneActor::RefreshDepositMarkers()
-{
-	// deposit marker sprite ids by resource
-	auto MarkerFor = [](EMinResource R) -> const TCHAR*
+	auto Upload = [&](UTexture2D* Tex, TArray<FColor>& Pixels)
 	{
-		switch (R)
-		{
-		case EMinResource::Coal:    return TEXT("res_00_04");
-		case EMinResource::Iron:    return TEXT("res_00_00");
-		case EMinResource::Copper:  return TEXT("res_00_01");
-		case EMinResource::Gold:    return TEXT("res_00_02");
-		case EMinResource::Crystal: return TEXT("res_00_07");
-		case EMinResource::Water:   return TEXT("res_00_06");
-		default:                    return TEXT("res_00_08");
-		}
+		FUpdateTextureRegion2D* Region = new FUpdateTextureRegion2D(PX0, PY0, PX0, PY0, PX1 - PX0, PY1 - PY0);
+		Tex->UpdateTextureRegions(0, 1, Region, W * 4, 4,
+			reinterpret_cast<uint8*>(Pixels.GetData()),
+			[](uint8*, const FUpdateTextureRegion2D* R) { delete R; });
 	};
-
-	for (const FMinDeposit& D : World->Deposits)
-	{
-		if (D.Plane != Plane || D.Remaining <= 0) continue;
-		if (DepositSprites.Contains(D.Id)) continue;
-		UStaticMeshComponent* C = Assets->MakeSpriteComponent(this, MarkerFor(D.Resource), 220.f,
-			FLinearColor::White, 1.f, /*SortPriority=*/1);
-		C->SetWorldLocation(Min::CellToWorld(D.Center.X, D.Center.Y, Plane, Min::DepthDeposit));
-		DepositSprites.Add(D.Id, C);
-		UE_LOG(LogMin, Log, TEXT("Deposit marker %d %s plane=%d at %s"), D.Id,
-			*FString(MinResInfo(D.Resource).Name), Plane, *C->GetComponentLocation().ToString());
-	}
-	// remove depleted
-	for (auto It = DepositSprites.CreateIterator(); It; ++It)
-	{
-		const FMinDeposit* D = World->Deposits.IsValidIndex(It.Key()) ? &World->Deposits[It.Key()] : nullptr;
-		if (!D || D->Remaining <= 0)
-		{
-			if (It.Value()) It.Value()->DestroyComponent();
-			It.RemoveCurrent();
-		}
-	}
+	Upload(TerrainTex, TerrainPixels);
+	Upload(BackTex, BackPixels);
 }
 
 void AMinPlaneActor::RebuildRoutes(UMinSim* Sim)
 {
-	if (!RouteMID)
-	{
-		RouteMID = UMaterialInstanceDynamic::Create(Assets->GetVertexMaterial(), this);
-		RouteMesh->SetMaterial(0, RouteMID);
-	}
+	FMeshAccum Under, Over; // outer rims, then inner lanes
+	const FColor Rim(94, 82, 70, 240);
+	const FColor Lane(51, 43, 40, 255);
+	const FColor Transfer(120, 200, 220, 255);
 
-	FMeshAccum Under, Over; // outer rims then inner lanes
-	for (const FMinEdge& E : Sim->Edges)
-	{
-		if (!E.bAlive) continue;
-		const int32 PA = E.Path[0].Z, PB = E.Path.Last().Z;
+	const float RimW = Min::CellSize * 0.165f;
+	const float LaneW = Min::CellSize * 0.105f;
 
-		if (E.Type == EMinRoute::LiftShaft)
+	for (const FIntVector& C : Sim->RouteCells)
+	{
+		FIntPoint UV;
+		if (!Min::CellToPlaneUV(C, Plane, UV)) continue;
+		const FVector P = CellPt(UV.X, UV.Y);
+		Under.Disc(P, RimW, Rim, 10);
+		Over.Disc(P, LaneW, Lane, 10);
+
+		// a route cell on a shared column is a cross-plane junction
+		if (Min::IsTransferCell(C))
 		{
-			// shaft marker ring wherever the shaft crosses this plane
-			const int32 P0 = FMath::Min(PA, PB), P1 = FMath::Max(PA, PB);
-			if (Plane >= P0 && Plane <= P1)
-			{
-				const FVector C = CellPt(FIntVector(E.Path[0].X, E.Path[0].Y, 0));
-				Under.Disc(C, 34.f, FColor(96, 84, 74, 235), 14);
-				Over.Disc(C, 24.f, FColor(150, 200, 235, 235), 14);
-			}
-			continue;
+			Under.Disc(P, RimW * 1.5f, Rim, 4);
+			Over.Disc(P, RimW * 1.05f, Transfer, 4);
 		}
-		if (PA != Plane) continue;
 
-		const TArray<FVector> Pts = PathToPoints(E.Path);
-		const bool bPipe = E.Type == EMinRoute::Pipe;
-		// colors are authored as display-intent sRGB; FMeshAccum::Enc linearizes
-		const FColor Rim = bPipe ? FColor(88, 102, 118, 240) : FColor(94, 82, 70, 240);
-		FLinearColor LaneDisp = bPipe ? FLinearColor(0.30f, 0.55f, 0.72f) : FLinearColor(0.20f, 0.17f, 0.155f);
-		// congestion glows the lane toward warm red
-		LaneDisp = FMath::Lerp(LaneDisp, FLinearColor(0.88f, 0.28f, 0.16f),
-			FMath::Clamp(E.CongestionSmoothed - 0.4f, 0.f, 1.f));
-		Under.Polyline(Pts, bPipe ? 20.f : 26.f, Rim);
-		Over.Polyline(Pts, bPipe ? 11.f : 16.f, LaneDisp.ToFColor(false));
-	}
-
-	// junction dots
-	for (const FMinNode& N : Sim->Nodes)
-	{
-		if (N.Cell.Z != Plane || N.Edges.Num() < 2) continue;
-		int32 AliveEdges = 0;
-		for (int32 EId : N.Edges) if (Sim->Edges[EId].bAlive) ++AliveEdges;
-		if (AliveEdges < 2) continue;
-		const FVector C = CellPt(FIntVector(N.Cell.X, N.Cell.Y, 0));
-		Under.Disc(C, 32.f, FColor(94, 82, 70, 240), 12);
-		Over.Disc(C, 20.f, FColor(238, 228, 205, 245), 12);
+		// links to neighbors on this plane (draw each pair once; always draw
+		// stubs into buildings since they are not in RouteCells)
+		const FIntVector Dirs[6] = {
+			{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1} };
+		for (const FIntVector& D : Dirs)
+		{
+			const FIntVector NC = C + D;
+			FIntPoint NUV;
+			if (!Min::CellToPlaneUV(NC, Plane, NUV)) continue;
+			if (!Min::CellsLinked(C, NC) || !Sim->IsWalkable(NC)) continue;
+			const bool bNeighborRoute = Sim->RouteCells.Contains(NC);
+			if (bNeighborRoute &&
+				!(NC.X > C.X || NC.Y > C.Y || NC.Z > C.Z)) continue; // draw once
+			const FVector NP = CellPt(NUV.X, NUV.Y);
+			Under.Strip(P, NP, RimW, Rim);
+			Over.Strip(P, NP, LaneW, Lane);
+			if (!bNeighborRoute) { Under.Disc(NP, RimW, Rim, 10); Over.Disc(NP, LaneW, Lane, 10); }
+		}
 	}
 
 	// merge: rims first so lanes draw over them
@@ -375,128 +341,139 @@ void AMinPlaneActor::RebuildRoutes(UMinSim* Sim)
 		All.V.Append(Over.V); All.N.Append(Over.N); All.UV.Append(Over.UV); All.C.Append(Over.C);
 		for (int32 I : Over.T) All.T.Add(Base + I);
 	}
-	// lift the lane slightly toward the camera to avoid z-fighting
 	for (int32 I = 0; I < All.V.Num(); ++I) All.V[I].Y = 0.f;
-
 	RouteMesh->CreateMeshSection(0, All.V, All.T, All.N, All.UV, All.C, TArray<FProcMeshTangent>(), false);
 }
 
-void AMinPlaneActor::SyncStructures(UMinSim* Sim)
+void AMinPlaneActor::RebuildMarkers(UMinSim* Sim)
 {
-	auto SpriteFor = [](const FMinStructureInst& S) { return UMinSim::StructureSprite(S.Type); };
-	auto SizeFor = [](EMinStructure T)
-	{
-		switch (T)
-		{
-		case EMinStructure::Base: return 420.f;
-		case EMinStructure::Smelter: return 230.f;
-		case EMinStructure::Depot: return 210.f;
-		case EMinStructure::Generator: return 190.f;
-		case EMinStructure::Lift: return 190.f;
-		case EMinStructure::Pump: return 170.f;
-		default: return 185.f;
-		}
-	};
+	FMeshAccum M;
 
-	for (const FMinStructureInst& S : Sim->Structures)
+	// depot: cream square with a dark rim
 	{
-		const bool bHere = S.bAlive && (S.Cell.Z == Plane ||
-			(S.Type == EMinStructure::Lift && S.TargetPlane == Plane));
-		const int32 Key = S.Id;
-		TObjectPtr<UStaticMeshComponent>* Existing = StructureSprites.Find(Key);
-		if (bHere && !Existing)
+		FIntPoint UV;
+		if (Min::CellToPlaneUV(Sim->DepotCell, Plane, UV))
 		{
-			UStaticMeshComponent* C = Assets->MakeSpriteComponent(this, SpriteFor(S), SizeFor(S.Type),
-				FLinearColor::White, 1.f, /*SortPriority=*/3);
-			FVector Loc = Min::CellToWorld(S.Cell.X, S.Cell.Y, Plane, Min::DepthStructure);
-			// the base building sits on top of the surface rather than inside it
-			if (S.Type == EMinStructure::Base) Loc.Z += Min::CellSize * 1.4f;
-			C->SetWorldLocation(Loc);
-			StructureSprites.Add(Key, C);
-		}
-		else if (!bHere && Existing)
-		{
-			if (*Existing) (*Existing)->DestroyComponent();
-			StructureSprites.Remove(Key);
-		}
-		else if (bHere && Existing && *Existing)
-		{
-			// unpowered structures dim slightly
-			if (UMaterialInstanceDynamic* M = Cast<UMaterialInstanceDynamic>((*Existing)->GetMaterial(0)))
-				M->SetVectorParameterValue(TEXT("Tint"),
-					S.bPowered ? FLinearColor::White : FLinearColor(0.72f, 0.70f, 0.68f));
+			const FVector P = CellPt(UV.X, UV.Y);
+			M.Box(P, Min::CellSize * 0.62f, FColor(70, 62, 55, 255));
+			M.Box(P, Min::CellSize * 0.54f, FColor(240, 230, 205, 255));
+			if (!DepotSprite)
+			{
+				DepotSprite = Assets->MakeSpriteComponent(this, TEXT("net_04_03"),
+					Min::CellSize * 0.9f, FLinearColor::White, 1.f, /*SortPriority=*/4);
+				DepotSprite->SetWorldLocation(Min::CellOnPlane(Sim->DepotCell, Plane, Min::DepthMarker + 4.f));
+				if (!Min::IsFront(Plane)) DepotSprite->SetWorldRotation(FRotator(0.f, 90.f, 0.f));
+			}
 		}
 	}
+
+	// pools: small colored discs
+	for (const FMinPool& Pool : Sim->Pools)
+	{
+		if (!Pool.bAlive) continue;
+		FIntPoint UV;
+		if (!Min::CellToPlaneUV(Pool.Cell, Plane, UV)) continue;
+		const FVector P = CellPt(UV.X, UV.Y);
+		const FLinearColor RC = MinResInfo(Pool.Res).Color;
+		M.Disc(P, Min::CellSize * 0.32f, Darken(RC, 0.45f), 14);
+		M.Disc(P, Min::CellSize * 0.25f, RC.ToFColor(true), 14);
+		// surplus load waiting for a depot run
+		if (Pool.bSurplusReady)
+			M.Disc(P + FVector(0, 0, Min::CellSize * 0.42f), Min::CellSize * 0.09f,
+				FColor(240, 230, 205, 255), 8);
+	}
+
+	// plants: bigger colored squares with pins and an overflow ring
+	for (const FMinPlant& Plant : Sim->Plants)
+	{
+		if (!Plant.bAlive) continue;
+		FIntPoint UV;
+		if (!Min::CellToPlaneUV(Plant.Cell, Plane, UV)) continue;
+		const FVector P = CellPt(UV.X, UV.Y);
+		const FLinearColor RC = MinResInfo(Plant.Res).Color;
+		M.Box(P, Min::CellSize * 0.60f, Darken(RC, 0.42f));
+		M.Box(P, Min::CellSize * 0.51f, RC.ToFColor(true));
+		M.Box(P, Min::CellSize * 0.18f, Darken(RC, 0.55f));
+
+		// demand pins march across the top
+		const float PinStep = Min::CellSize * 0.17f;
+		const float PinY = Min::CellSize * 0.78f;
+		for (int32 I = 0; I < Plant.Pins; ++I)
+		{
+			const int32 Row = I / 6, Col = I % 6;
+			const FVector PinP = P + FVector((Col - 2.5f) * PinStep, 0.f, PinY + Row * PinStep);
+			M.Box(PinP, Min::CellSize * 0.055f,
+				Plant.Pins >= UMinSim::PinCap ? FColor(235, 64, 52, 255) : FColor(245, 238, 220, 255));
+		}
+
+		// fail countdown ring
+		if (Plant.bOverflow || Plant.OverflowT < UMinSim::OverflowMax - 0.5f)
+		{
+			const float Frac = FMath::Clamp(Plant.OverflowT / UMinSim::OverflowMax, 0.f, 1.f);
+			M.Arc(P, Min::CellSize * 0.72f, Min::CellSize * 0.82f, 1.f, FColor(60, 52, 48, 160), 28);
+			M.Arc(P, Min::CellSize * 0.72f, Min::CellSize * 0.82f, Frac,
+				Plant.bOverflow ? FColor(235, 64, 52, 255) : FColor(240, 230, 205, 220), 28);
+		}
+	}
+
+	for (int32 I = 0; I < M.V.Num(); ++I) M.V[I].Y = 0.f;
+	MarkerMesh->CreateMeshSection(0, M.V, M.T, M.N, M.UV, M.C, TArray<FProcMeshTangent>(), false);
 }
 
 void AMinPlaneActor::UpdateCarts(UMinSim* Sim)
 {
-	auto CartSprite = [](EMinResource R) -> const TCHAR*
-	{
-		switch (R)
-		{
-		case EMinResource::Coal: return TEXT("veh_01_00");
-		case EMinResource::Iron: return TEXT("veh_01_02");
-		case EMinResource::Copper: return TEXT("veh_01_05");
-		case EMinResource::Gold: return TEXT("veh_01_01");
-		case EMinResource::Crystal: return TEXT("veh_01_03");
-		case EMinResource::Water: return TEXT("veh_01_06");
-		case EMinResource::IronIngot: return TEXT("veh_02_01");
-		case EMinResource::CopperIngot: return TEXT("veh_02_02");
-		case EMinResource::GoldBar: return TEXT("veh_02_00");
-		default: return TEXT("veh_00_00");
-		}
-	};
-
 	int32 Used = 0;
 	for (const FMinCart& Cart : Sim->Carts)
 	{
 		if (!Cart.bAlive || Cart.Plane != Plane) continue;
 		if (Used >= CartPool.Num())
 		{
-			UStaticMeshComponent* C = Assets->MakeSpriteComponent(this, CartSprite(Cart.Cargo), 95.f,
-				FLinearColor::White, 1.f, /*SortPriority=*/4);
-			CartPool.Add(C);
-			CartPoolSprite.Add(CartSprite(Cart.Cargo));
+			// a plain tintable quad: flat colored cart
+			UStaticMeshComponent* Q = NewObject<UStaticMeshComponent>(this);
+			Q->SetStaticMesh(Assets->GetQuad());
+			Q->SetMaterial(0, Assets->MakeTexMID(Q, nullptr, FLinearColor::White));
+			Q->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+			Q->SetCastShadow(false);
+			Q->SetTranslucentSortPriority(5);
+			Q->RegisterComponent();
+			Q->SetWorldScale3D(FVector(Min::CellSize * 0.0042f, 1.f, Min::CellSize * 0.0042f));
+			if (!Min::IsFront(Plane)) Q->SetWorldRotation(FRotator(0.f, 90.f, 0.f));
+			CartPool.Add(Q);
 		}
-		UStaticMeshComponent* C = CartPool[Used];
-		const FString WantSprite = CartSprite(Cart.Cargo);
-		if (CartPoolSprite[Used] != WantSprite)
+		UStaticMeshComponent* Q = CartPool[Used];
+		FVector Loc = Cart.WorldPos;
+		if (Min::IsFront(Plane)) Loc.Y = Min::FrontPlaneY(Plane) + Min::DepthCart;
+		else Loc.X = Min::SidePlaneX(Plane - Min::NumFront) - Min::DepthCart;
+		Q->SetWorldLocation(Loc);
+		Q->SetVisibility(ContentOpacityCur > 0.01f);
+		if (UMaterialInstanceDynamic* Mat = Cast<UMaterialInstanceDynamic>(Q->GetMaterial(0)))
 		{
-			CartPoolSprite[Used] = WantSprite;
-			if (UMaterialInstanceDynamic* M = Cast<UMaterialInstanceDynamic>(C->GetMaterial(0)))
-				M->SetTextureParameterValue(TEXT("Tex"), Assets->GetSprite(WantSprite));
+			FLinearColor Col = MinResInfo(Cart.Res).Color;
+			if (Cart.bReturning) Col *= 0.55f;
+			Mat->SetVectorParameterValue(TEXT("Tint"), Col);
+			Mat->SetScalarParameterValue(TEXT("Opacity"), ContentOpacityCur);
 		}
-		C->SetWorldLocation(FVector(Cart.WorldPos.X, Plane * Min::PlaneGap + Min::DepthCart, Cart.WorldPos.Z));
-		C->SetVisibility(ContentOpacityCur > 0.01f);
-		if (UMaterialInstanceDynamic* M = Cast<UMaterialInstanceDynamic>(C->GetMaterial(0)))
-			M->SetScalarParameterValue(TEXT("Opacity"), ContentOpacityCur);
 		++Used;
 	}
 	for (int32 I = Used; I < CartPool.Num(); ++I)
 		if (CartPool[I]) CartPool[I]->SetVisibility(false);
 }
 
-void AMinPlaneActor::ShowPreview(const TArray<FIntPoint>& Cells, bool bValid, EMinRoute Type)
+void AMinPlaneActor::ShowPreview(const TArray<FIntPoint>& Cells, bool bValid, bool bErase)
 {
-	if (!PreviewMID)
-	{
-		PreviewMID = UMaterialInstanceDynamic::Create(Assets->GetVertexMaterial(), this);
-		GhostRouteMesh->SetMaterial(0, PreviewMID);
-		GhostRouteMesh->SetTranslucentSortPriority(6);
-	}
 	FMeshAccum M;
-	const FColor Col = bValid ? FColor(90, 210, 120, 150) : FColor(230, 70, 60, 150);
-	const FColor Edge = bValid ? FColor(150, 245, 175, 230) : FColor(255, 120, 105, 230);
+	const FColor Col = bErase ? FColor(230, 70, 60, 150)
+		: (bValid ? FColor(90, 210, 120, 150) : FColor(230, 70, 60, 150));
+	const FColor Edge = bErase ? FColor(255, 120, 105, 230)
+		: (bValid ? FColor(150, 245, 175, 230) : FColor(255, 120, 105, 230));
 	TArray<FVector> Pts;
-	for (const FIntPoint& C : Cells) Pts.Add(CellPt(FIntVector(C.X, C.Y, 0)));
+	for (const FIntPoint& C : Cells) Pts.Add(CellPt(C.X, C.Y));
 
-	// grid-aligned cell highlight so the snap-to-cell is obvious: soft fill
-	// plus a brighter outline hugging the hovered cell
+	// grid-aligned cell highlight: soft fill plus a brighter outline
 	auto CellHighlight = [&](const FVector& Center)
 	{
-		const float H = Min::CellSize * 0.5f - 2.f;
-		const float B = 5.f; // outline thickness
+		const float H = Min::CellSize * 0.5f - 4.f;
+		const float B = 10.f; // outline thickness
 		M.Quad(Center + FVector(-H, 0, -H), Center + FVector(H, 0, -H),
 			Center + FVector(H, 0, H), Center + FVector(-H, 0, H), Col);
 		M.Quad(Center + FVector(-H, 0, H - B), Center + FVector(H, 0, H - B),
@@ -510,10 +487,12 @@ void AMinPlaneActor::ShowPreview(const TArray<FIntPoint>& Cells, bool bValid, EM
 	};
 
 	if (Pts.Num() == 1) CellHighlight(Pts[0]);
-	else
+	else if (Pts.Num() > 1)
 	{
-		M.Polyline(Pts, Type == EMinRoute::Pipe ? 18.f : 24.f, Col);
-		CellHighlight(Pts.Last()); // the cell under the cursor while dragging
+		for (int32 I = 0; I + 1 < Pts.Num(); ++I)
+			M.Strip(Pts[I], Pts[I + 1], Min::CellSize * 0.11f, Col);
+		for (const FVector& P : Pts) M.Disc(P, Min::CellSize * 0.11f, Col, 8);
+		CellHighlight(Pts.Last());
 	}
 	GhostRouteMesh->CreateMeshSection(0, M.V, M.T, M.N, M.UV, M.C, TArray<FProcMeshTangent>(), false);
 	GhostRouteMesh->SetVisibility(true);
@@ -524,26 +503,23 @@ void AMinPlaneActor::ClearPreview()
 	GhostRouteMesh->ClearMeshSection(0);
 }
 
-void AMinPlaneActor::SetViewOpacity(float TerrainOpacity, float ContentOpacity, bool bShowDeposits)
+void AMinPlaneActor::SetViewOpacity(float TerrainOpacity, float ContentOpacity)
 {
 	ContentOpacityCur = ContentOpacity;
 	if (TerrainMID) TerrainMID->SetScalarParameterValue(TEXT("Opacity"), TerrainOpacity);
+	if (BackMID) BackMID->SetScalarParameterValue(TEXT("Opacity"), TerrainOpacity);
 	TerrainQuad->SetVisibility(TerrainOpacity > 0.01f);
+	BackQuad->SetVisibility(TerrainOpacity > 0.01f);
+
 	const bool bContent = ContentOpacity > 0.01f;
-	for (auto& Pair : DepositSprites)
-	{
-		if (!Pair.Value) continue;
-		Pair.Value->SetVisibility(bShowDeposits);
-		if (UMaterialInstanceDynamic* M = Cast<UMaterialInstanceDynamic>(Pair.Value->GetMaterial(0)))
-			M->SetScalarParameterValue(TEXT("Opacity"), ContentOpacity);
-	}
-	for (auto& Pair : StructureSprites)
-	{
-		if (!Pair.Value) continue;
-		Pair.Value->SetVisibility(bContent);
-		if (UMaterialInstanceDynamic* M = Cast<UMaterialInstanceDynamic>(Pair.Value->GetMaterial(0)))
-			M->SetScalarParameterValue(TEXT("Opacity"), ContentOpacity);
-	}
 	if (RouteMID) RouteMID->SetScalarParameterValue(TEXT("Opacity"), ContentOpacity);
+	if (MarkerMID) MarkerMID->SetScalarParameterValue(TEXT("Opacity"), ContentOpacity);
 	RouteMesh->SetVisibility(bContent);
+	MarkerMesh->SetVisibility(bContent);
+	if (DepotSprite)
+	{
+		DepotSprite->SetVisibility(bContent);
+		if (UMaterialInstanceDynamic* Mat = Cast<UMaterialInstanceDynamic>(DepotSprite->GetMaterial(0)))
+			Mat->SetScalarParameterValue(TEXT("Opacity"), ContentOpacity);
+	}
 }

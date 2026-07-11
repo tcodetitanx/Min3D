@@ -6,6 +6,11 @@
 #include "MinSim.h"
 #include "MinAssets.h"
 #include "Engine/Texture2D.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
+#include "Dom/JsonObject.h"
+#include "Serialization/JsonReader.h"
+#include "Serialization/JsonSerializer.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/SOverlay.h"
 #include "Widgets/Images/SImage.h"
@@ -13,7 +18,6 @@
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
-#include "Widgets/Notifications/SProgressBar.h"
 #include "Styling/CoreStyle.h"
 
 namespace
@@ -23,10 +27,29 @@ namespace
 	const FLinearColor Cream(0.96f, 0.93f, 0.86f);
 	const FLinearColor Accent(0.55f, 0.83f, 0.78f);
 	const FLinearColor AccentWarm(0.95f, 0.75f, 0.35f);
+	const FLinearColor Danger(1.f, 0.45f, 0.35f);
 
 	FSlateFontInfo Font(int32 Size, const FName Weight = "Bold")
 	{
 		return FCoreStyle::GetDefaultFontStyle(Weight, Size);
+	}
+
+	int32 ReadHighScore(EMinGameRules Rules)
+	{
+		FString In;
+		const FString Path = FPaths::ProjectSavedDir() / TEXT("SaveGames") / TEXT("min3d_scores.json");
+		if (!FFileHelper::LoadFileToString(In, *Path)) return 0;
+		TSharedPtr<FJsonObject> Root;
+		if (!FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(In), Root) || !Root.IsValid()) return 0;
+		double V = 0;
+		Root->TryGetNumberField(Rules == EMinGameRules::SinglePlane ? TEXT("single") : TEXT("cross"), V);
+		return (int32)V;
+	}
+
+	FString Clock(float Seconds)
+	{
+		const int32 S = FMath::Max(0, FMath::FloorToInt(Seconds));
+		return FString::Printf(TEXT("%d:%02d"), S / 60, S % 60);
 	}
 }
 
@@ -61,18 +84,18 @@ void SMinHUD::Construct(const FArguments& InArgs, AMinPlayerController* InPC)
 		[
 			SNew(SHorizontalBox)
 			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Top)
-			[ BuildResourceBar() ]
+			[ BuildScorePanel() ]
 			+ SHorizontalBox::Slot().FillWidth(1.f).HAlign(HAlign_Center).VAlign(VAlign_Top)
 			[ BuildPlaneTabs() ]
 			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Top)
-			[ BuildContractPanel() ]
+			[ BuildRightPanel() ]
 		]
 		+ SOverlay::Slot().HAlign(HAlign_Center).VAlign(VAlign_Bottom).Padding(0, 0, 0, 12)
 		[ BuildToolbar() ]
 		+ SOverlay::Slot().HAlign(HAlign_Left).VAlign(VAlign_Bottom).Padding(12, 0, 0, 14)
 		[ BuildStatusArea() ]
-		+ SOverlay::Slot().HAlign(HAlign_Left).VAlign(VAlign_Top).Padding(10, 64, 0, 0)
-		[ BuildTutorialPanel() ]
+		+ SOverlay::Slot().HAlign(HAlign_Fill).VAlign(VAlign_Fill)
+		[ BuildGameOverOverlay() ]
 	];
 	SetVisibility(TAttribute<EVisibility>::CreateLambda([this]()
 	{
@@ -80,100 +103,115 @@ void SMinHUD::Construct(const FArguments& InArgs, AMinPlayerController* InPC)
 	}));
 }
 
-TSharedRef<SWidget> SMinHUD::BuildResourceBar()
+TSharedRef<SWidget> SMinHUD::BuildScorePanel()
 {
-	struct FEntry { EMinResource Res; const TCHAR* Icon; };
-	static const FEntry Entries[] = {
-		{ EMinResource::Iron, TEXT("ico_01_02") },
-		{ EMinResource::Copper, TEXT("ico_01_04") },
-		{ EMinResource::Gold, TEXT("ico_01_05") },
-		{ EMinResource::Coal, TEXT("ico_01_00") },
-		{ EMinResource::Water, TEXT("ico_00_01") },
-		{ EMinResource::IronIngot, TEXT("ico_00_04") },
-		{ EMinResource::CopperIngot, TEXT("ico_00_05") },
-		{ EMinResource::GoldBar, TEXT("ico_00_03") },
-	};
-
-	TSharedRef<SHorizontalBox> Row = SNew(SHorizontalBox);
-
-	// credits first
-	Row->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(4, 0)
-	[
-		SNew(SImage).Image(MakeIconBrush(TEXT("ico_06_07"), 22.f).Get())
-	];
-	Row->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(2, 0, 10, 0)
-	[
-		SNew(STextBlock)
-		.Font(Font(16))
-		.ColorAndOpacity(AccentWarm)
-		.Text(TAttribute<FText>::CreateLambda([this]()
-		{
-			UMinSim* Sim = PC ? PC->GetSim() : nullptr;
-			return FText::FromString(FString::Printf(TEXT("%d"), Sim ? Sim->Credits : 0));
-		}))
-	];
-
-	for (const FEntry& E : Entries)
-	{
-		const EMinResource Res = E.Res;
-		Row->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(6, 0, 0, 0)
-		[
-			SNew(SImage).Image(MakeIconBrush(E.Icon, 20.f).Get())
-		];
-		Row->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(2, 0)
-		[
-			SNew(STextBlock)
-			.Font(Font(14))
-			.ColorAndOpacity(Cream)
-			.Text(TAttribute<FText>::CreateLambda([this, Res]()
-			{
-				UMinSim* Sim = PC ? PC->GetSim() : nullptr;
-				const int32* N = Sim ? Sim->Stock.Find(Res) : nullptr;
-				return FText::FromString(FString::Printf(TEXT("%d"), N ? *N : 0));
-			}))
-		];
-	}
-
 	return SNew(SBorder)
 		.BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
 		.BorderBackgroundColor(PanelBg)
-		.Padding(FMargin(10, 6))
-		[ Row ];
+		.Padding(FMargin(14, 6))
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				SNew(STextBlock).Font(Font(24)).ColorAndOpacity(AccentWarm)
+				.Text(TAttribute<FText>::CreateLambda([this]()
+				{
+					UMinSim* Sim = PC ? PC->GetSim() : nullptr;
+					return FText::FromString(FString::Printf(TEXT("%d"), Sim ? Sim->Score : 0));
+				}))
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Bottom).Padding(10, 0, 0, 3)
+			[
+				SNew(STextBlock).Font(Font(11, "Regular")).ColorAndOpacity(FLinearColor(0.8f, 0.78f, 0.72f))
+				.Text(TAttribute<FText>::CreateLambda([this]()
+				{
+					UMinSim* Sim = PC ? PC->GetSim() : nullptr;
+					return FText::FromString(FString::Printf(TEXT("BEST %d"), Sim ? Sim->HighScore : 0));
+				}))
+			]
+		];
 }
 
 TSharedRef<SWidget> SMinHUD::BuildPlaneTabs()
 {
 	TSharedRef<SHorizontalBox> Row = SNew(SHorizontalBox);
-	for (int32 P = 0; P < Min::NP; ++P)
+
+	// orientation toggle: the perspective shift between front and side grids
+	Row->AddSlot().AutoWidth().Padding(2, 0, 10, 0)
+	[
+		SNew(SButton)
+		.ButtonColorAndOpacity(TAttribute<FSlateColor>::CreateLambda([this]()
+		{
+			AMinPawn* Pawn = PC ? PC->GetMinPawn() : nullptr;
+			return Pawn && Pawn->bSideView ? FSlateColor(AccentWarm) : FSlateColor(FLinearColor(0.25f, 0.24f, 0.22f, 0.9f));
+		}))
+		.OnClicked_Lambda([this]() { if (PC) PC->ToggleSideView(); return FReply::Handled(); })
+		[
+			SNew(STextBlock).Font(Font(13))
+			.ColorAndOpacity(TAttribute<FSlateColor>::CreateLambda([this]()
+			{
+				AMinPawn* Pawn = PC ? PC->GetMinPawn() : nullptr;
+				return Pawn && Pawn->bSideView ? FSlateColor(FLinearColor(0.1f, 0.08f, 0.05f)) : FSlateColor(Cream);
+			}))
+			.Text(TAttribute<FText>::CreateLambda([this]()
+			{
+				AMinPawn* Pawn = PC ? PC->GetMinPawn() : nullptr;
+				return FText::FromString(Pawn && Pawn->bSideView ? TEXT("SIDE [Tab]") : TEXT("FRONT [Tab]"));
+			}))
+		]
+	];
+
+	for (int32 P = 0; P < 3; ++P)
 	{
-		const int32 Plane = P;
+		const int32 Idx = P;
 		Row->AddSlot().AutoWidth().Padding(2, 0)
 		[
 			SNew(SButton)
-			.ButtonColorAndOpacity(TAttribute<FSlateColor>::CreateLambda([this, Plane]()
+			.ButtonColorAndOpacity(TAttribute<FSlateColor>::CreateLambda([this, Idx]()
 			{
 				AMinPawn* Pawn = PC ? PC->GetMinPawn() : nullptr;
-				const bool bCur = Pawn && Pawn->ViewPlane == Plane;
+				const bool bCur = Pawn && (Pawn->bSideView ? Pawn->ViewSide : Pawn->ViewFront) == Idx;
 				return bCur ? FSlateColor(Accent) : FSlateColor(FLinearColor(0.25f, 0.24f, 0.22f, 0.9f));
 			}))
-			.OnClicked_Lambda([this, Plane]()
+			.OnClicked_Lambda([this, Idx]()
 			{
-				if (PC) PC->JumpToPlane(Plane);
+				if (PC) PC->JumpToPlane(Idx);
 				return FReply::Handled();
 			})
 			[
 				SNew(STextBlock)
 				.Font(Font(13))
-				.ColorAndOpacity(TAttribute<FSlateColor>::CreateLambda([this, Plane]()
+				.ColorAndOpacity(TAttribute<FSlateColor>::CreateLambda([this, Idx]()
 				{
 					AMinPawn* Pawn = PC ? PC->GetMinPawn() : nullptr;
-					return Pawn && Pawn->ViewPlane == Plane
-						? FSlateColor(FLinearColor(0.05f, 0.08f, 0.08f)) : FSlateColor(Cream);
+					const bool bCur = Pawn && (Pawn->bSideView ? Pawn->ViewSide : Pawn->ViewFront) == Idx;
+					return bCur ? FSlateColor(FLinearColor(0.05f, 0.08f, 0.08f)) : FSlateColor(Cream);
 				}))
-				.Text(FText::FromString(Min::PlaneName(Plane)))
+				.Text(TAttribute<FText>::CreateLambda([this, Idx]()
+				{
+					AMinPawn* Pawn = PC ? PC->GetMinPawn() : nullptr;
+					const bool bSide = Pawn && Pawn->bSideView;
+					return FText::FromString(Min::PlaneName(bSide ? Min::NumFront + Idx : Idx));
+				}))
 			]
 		];
 	}
+
+	Row->AddSlot().AutoWidth().Padding(10, 0, 2, 0)
+	[
+		SNew(SButton)
+		.ButtonColorAndOpacity(TAttribute<FSlateColor>::CreateLambda([this]()
+		{
+			AMinPawn* Pawn = PC ? PC->GetMinPawn() : nullptr;
+			return Pawn && Pawn->bMatrixView ? FSlateColor(Accent) : FSlateColor(FLinearColor(0.25f, 0.24f, 0.22f, 0.9f));
+		}))
+		.OnClicked_Lambda([this]() { if (PC) PC->ToggleMatrix(); return FReply::Handled(); })
+		[
+			SNew(STextBlock).Font(Font(13)).ColorAndOpacity(Cream)
+			.Text(FText::FromString(TEXT("3D [M]")))
+		]
+	];
+
 	return SNew(SBorder)
 		.BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
 		.BorderBackgroundColor(PanelBgSoft)
@@ -181,19 +219,48 @@ TSharedRef<SWidget> SMinHUD::BuildPlaneTabs()
 		[ Row ];
 }
 
+TSharedRef<SWidget> SMinHUD::BuildRightPanel()
+{
+	return SNew(SBorder)
+		.BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
+		.BorderBackgroundColor(PanelBg)
+		.Padding(FMargin(12, 6))
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 4, 0)
+			[
+				SNew(SImage).Image(MakeIconBrush(TEXT("ico_03_01"), 22.f).Get())
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				SNew(STextBlock).Font(Font(16)).ColorAndOpacity(Cream)
+				.Text(TAttribute<FText>::CreateLambda([this]()
+				{
+					UMinSim* Sim = PC ? PC->GetSim() : nullptr;
+					return FText::FromString(FString::Printf(TEXT("%d"), Sim ? Sim->SegmentsLeft : 0));
+				}))
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(14, 0, 0, 0)
+			[
+				SNew(STextBlock).Font(Font(14)).ColorAndOpacity(FLinearColor(0.8f, 0.78f, 0.72f))
+				.Text(TAttribute<FText>::CreateLambda([this]()
+				{
+					UMinSim* Sim = PC ? PC->GetSim() : nullptr;
+					FString S = Sim ? Clock(Sim->PlayTime) : TEXT("0:00");
+					if (Sim && Sim->SimSpeed > 1.f) S += FString::Printf(TEXT("  x%.0f"), Sim->SimSpeed);
+					if (Sim && Sim->bPaused) S += TEXT("  ||");
+					return FText::FromString(S);
+				}))
+			]
+		];
+}
+
 TSharedRef<SWidget> SMinHUD::BuildToolbar()
 {
 	struct FToolDef { EMinTool Tool; const TCHAR* Key; const TCHAR* Icon; const TCHAR* Label; };
 	static const FToolDef Tools[] = {
-		{ EMinTool::Tunnel, TEXT("1"), TEXT("ico_03_00"), TEXT("Tunnel") },
-		{ EMinTool::Pipe, TEXT("2"), TEXT("veh_05_08"), TEXT("Pipe") },
-		{ EMinTool::Miner, TEXT("3"), TEXT("net_05_02"), TEXT("Miner") },
-		{ EMinTool::Pump, TEXT("4"), TEXT("net_08_04"), TEXT("Pump") },
-		{ EMinTool::Smelter, TEXT("5"), TEXT("mac_00_00"), TEXT("Smelter") },
-		{ EMinTool::Depot, TEXT("6"), TEXT("net_04_03"), TEXT("Depot") },
-		{ EMinTool::Generator, TEXT("7"), TEXT("mac_07_00"), TEXT("Generator") },
-		{ EMinTool::Lift, TEXT("8"), TEXT("net_02_05"), TEXT("Lift") },
-		{ EMinTool::Remove, TEXT("X"), TEXT("ico_07_03"), TEXT("Remove") },
+		{ EMinTool::Tunnel, TEXT("1"), TEXT("ico_03_01"), TEXT("Tunnel") },
+		{ EMinTool::Erase, TEXT("X"), TEXT("ico_07_03"), TEXT("Erase") },
 	};
 
 	TSharedRef<SHorizontalBox> Row = SNew(SHorizontalBox);
@@ -238,84 +305,12 @@ TSharedRef<SWidget> SMinHUD::BuildToolbar()
 		[ Row ];
 }
 
-TSharedRef<SWidget> SMinHUD::BuildContractPanel()
-{
-	return SNew(SBorder)
-		.BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
-		.BorderBackgroundColor(PanelBg)
-		.Padding(FMargin(12, 8))
-		[
-			SNew(SBox).WidthOverride(300)
-			[
-				SNew(SVerticalBox)
-				+ SVerticalBox::Slot().AutoHeight()
-				[
-					SNew(STextBlock).Font(Font(15)).ColorAndOpacity(AccentWarm)
-					.Text(TAttribute<FText>::CreateLambda([this]()
-					{
-						UMinSim* Sim = PC ? PC->GetSim() : nullptr;
-						if (!Sim || !Sim->Contracts.IsValidIndex(Sim->ActiveContract)) return FText::GetEmpty();
-						const FMinContract& C = Sim->Contracts[Sim->ActiveContract];
-						return FText::FromString(FString::Printf(TEXT("Contract: %s"), *C.Title));
-					}))
-				]
-				+ SVerticalBox::Slot().AutoHeight().Padding(0, 4)
-				[
-					SNew(SProgressBar)
-					.FillColorAndOpacity(Accent)
-					.Percent(TAttribute<TOptional<float>>::CreateLambda([this]() -> TOptional<float>
-					{
-						UMinSim* Sim = PC ? PC->GetSim() : nullptr;
-						if (!Sim || !Sim->Contracts.IsValidIndex(Sim->ActiveContract)) return 0.f;
-						const FMinContract& C = Sim->Contracts[Sim->ActiveContract];
-						return C.Needed > 0 ? float(C.Delivered) / C.Needed : 0.f;
-					}))
-				]
-				+ SVerticalBox::Slot().AutoHeight()
-				[
-					SNew(STextBlock).Font(Font(13)).ColorAndOpacity(Cream)
-					.Text(TAttribute<FText>::CreateLambda([this]()
-					{
-						UMinSim* Sim = PC ? PC->GetSim() : nullptr;
-						if (!Sim || !Sim->Contracts.IsValidIndex(Sim->ActiveContract)) return FText::GetEmpty();
-						const FMinContract& C = Sim->Contracts[Sim->ActiveContract];
-						return FText::FromString(FString::Printf(TEXT("%s  %d / %d   reward %d"),
-							C.Resource == EMinResource::None ? TEXT("Any cargo") : MinResInfo(C.Resource).Name,
-							C.Delivered, C.Needed, C.RewardCredits));
-					}))
-				]
-				+ SVerticalBox::Slot().AutoHeight().Padding(0, 5, 0, 0)
-				[
-					SNew(STextBlock).Font(Font(11, "Regular")).ColorAndOpacity(FLinearColor(0.85f, 0.83f, 0.78f))
-					.AutoWrapText(true)
-					.Text(TAttribute<FText>::CreateLambda([this]()
-					{
-						UMinSim* Sim = PC ? PC->GetSim() : nullptr;
-						if (!Sim || !Sim->Contracts.IsValidIndex(Sim->ActiveContract)) return FText::GetEmpty();
-						return FText::FromString(Sim->Contracts[Sim->ActiveContract].Hint);
-					}))
-				]
-				+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
-				[
-					SNew(STextBlock).Font(Font(11, "Regular")).ColorAndOpacity(FLinearColor(0.7f, 0.85f, 0.8f))
-					.Text(TAttribute<FText>::CreateLambda([this]()
-					{
-						UMinSim* Sim = PC ? PC->GetSim() : nullptr;
-						if (!Sim) return FText::GetEmpty();
-						return FText::FromString(FString::Printf(TEXT("Carts %d   Congestion %.0f%%   Delivered %d"),
-							Sim->CartsInFlight(), Sim->AvgCongestion() * 100.f, Sim->TotalDeliveries));
-					}))
-				]
-			]
-		];
-}
-
 TSharedRef<SWidget> SMinHUD::BuildStatusArea()
 {
 	return SNew(SVerticalBox)
 	+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Left)
 	[
-		SNew(STextBlock).Font(Font(13)).ColorAndOpacity(FLinearColor(1.f, 0.55f, 0.4f))
+		SNew(STextBlock).Font(Font(14)).ColorAndOpacity(Danger)
 		.Text(TAttribute<FText>::CreateLambda([this]()
 		{
 			UMinSim* Sim = PC ? PC->GetSim() : nullptr;
@@ -344,82 +339,85 @@ TSharedRef<SWidget> SMinHUD::BuildStatusArea()
 		.Text(TAttribute<FText>::CreateLambda([this]()
 		{
 			AMinPawn* Pawn = PC ? PC->GetMinPawn() : nullptr;
-			const FString PlaneStr = Pawn ? Min::PlaneName(Pawn->ViewPlane) : TEXT("?");
+			const FString PlaneStr = Pawn ? Min::PlaneName(Pawn->CurrentPlane()) : TEXT("?");
 			return FText::FromString(FString::Printf(
-				TEXT("Plane %s   Q/E planes   Tab matrix   WASD pan   wheel zoom   Space pause   F speed   G ghosts   F5 save   F9 load"),
+				TEXT("Plane %s   Tab side view   Q/E planes   M 3D view   WASD pan   wheel zoom   Space pause   F speed"),
 				*PlaneStr));
 		}))
 	];
 }
 
-TSharedRef<SWidget> SMinHUD::BuildTutorialPanel()
+TSharedRef<SWidget> SMinHUD::BuildGameOverOverlay()
 {
 	return SNew(SBorder)
 		.BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
-		.BorderBackgroundColor(FLinearColor(0.05f, 0.07f, 0.07f, 0.80f))
-		.Padding(FMargin(14, 10))
+		.BorderBackgroundColor(FLinearColor(0.03f, 0.03f, 0.04f, 0.72f))
+		.HAlign(HAlign_Center).VAlign(VAlign_Center)
 		.Visibility_Lambda([this]()
 		{
-			AMinGameMode* GM = PC ? PC->GetGM() : nullptr;
-			return GM && GM->TutStep >= 0 ? EVisibility::Visible : EVisibility::Collapsed;
+			UMinSim* Sim = PC ? PC->GetSim() : nullptr;
+			return Sim && Sim->bGameOver ? EVisibility::Visible : EVisibility::Collapsed;
 		})
 		[
-			SNew(SBox).WidthOverride(340)
+			SNew(SVerticalBox)
+			+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center)
 			[
-				SNew(SVerticalBox)
-				+ SVerticalBox::Slot().AutoHeight()
+				SNew(STextBlock).Font(Font(42)).ColorAndOpacity(Danger)
+				.Text(FText::FromString(TEXT("THE MINE HAS CLOSED")))
+			]
+			+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0, 6)
+			[
+				SNew(STextBlock).Font(Font(14, "Regular")).ColorAndOpacity(Cream)
+				.Text_Lambda([this]()
+				{
+					UMinSim* Sim = PC ? PC->GetSim() : nullptr;
+					return FText::FromString(Sim ? Sim->GameOverReason : FString());
+				})
+			]
+			+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0, 18, 0, 2)
+			[
+				SNew(STextBlock).Font(Font(64)).ColorAndOpacity(AccentWarm)
+				.Text_Lambda([this]()
+				{
+					UMinSim* Sim = PC ? PC->GetSim() : nullptr;
+					return FText::FromString(FString::Printf(TEXT("%d"), Sim ? Sim->Score : 0));
+				})
+			]
+			+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0, 0, 0, 24)
+			[
+				SNew(STextBlock).Font(Font(14)).ColorAndOpacity(FLinearColor(0.8f, 0.78f, 0.72f))
+				.Text_Lambda([this]()
+				{
+					UMinSim* Sim = PC ? PC->GetSim() : nullptr;
+					if (!Sim) return FText::GetEmpty();
+					return FText::FromString(Sim->bNewRecord
+						? TEXT("NEW RECORD!")
+						: FString::Printf(TEXT("best %d"), Sim->HighScore));
+				})
+			]
+			+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0, 4)
+			[
+				SNew(SBox).WidthOverride(260).HeightOverride(44)
 				[
-					SNew(STextBlock).Font(Font(16)).ColorAndOpacity(Accent)
-					.Text_Lambda([this]()
-					{
-						AMinGameMode* GM = PC ? PC->GetGM() : nullptr;
-						return GM ? FText::FromString(GM->TutTitle) : FText::GetEmpty();
-					})
-				]
-				+ SVerticalBox::Slot().AutoHeight().Padding(0, 6)
-				[
-					SNew(STextBlock).Font(Font(12, "Regular")).ColorAndOpacity(Cream)
-					.AutoWrapText(true)
-					.Text_Lambda([this]()
-					{
-						AMinGameMode* GM = PC ? PC->GetGM() : nullptr;
-						return GM ? FText::FromString(GM->TutText) : FText::GetEmpty();
-					})
-				]
-				+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
-				[
-					SNew(SHorizontalBox)
-					+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 8, 0)
+					SNew(SButton).HAlign(HAlign_Center).VAlign(VAlign_Center)
+					.ButtonColorAndOpacity(Accent)
+					.OnClicked_Lambda([this]() { if (PC) PC->RestartRun(); return FReply::Handled(); })
 					[
-						SNew(SButton)
-						.ButtonColorAndOpacity(Accent)
-						.OnClicked_Lambda([this]()
-						{
-							if (AMinGameMode* GM = PC ? PC->GetGM() : nullptr) GM->TutorialNext();
-							return FReply::Handled();
-						})
-						[
-							SNew(STextBlock).Font(Font(12)).ColorAndOpacity(FLinearColor(0.05f, 0.08f, 0.08f))
-							.Text_Lambda([this]()
-							{
-								AMinGameMode* GM = PC ? PC->GetGM() : nullptr;
-								return FText::FromString(GM && GM->bTutFinal ? TEXT("Finish") : TEXT("Next"));
-							})
-						]
+						SNew(STextBlock).Font(Font(16)).ColorAndOpacity(FLinearColor(0.05f, 0.08f, 0.08f))
+						.Text(FText::FromString(TEXT("DIG AGAIN")))
 					]
-					+ SHorizontalBox::Slot().AutoWidth()
+				]
+			]
+			+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0, 4)
+			[
+				SNew(SBox).WidthOverride(260).HeightOverride(44)
+				[
+					SNew(SButton).HAlign(HAlign_Center).VAlign(VAlign_Center)
+					.ButtonColorAndOpacity(FLinearColor(0.3f, 0.29f, 0.27f))
+					.OnClicked_Lambda([this]() { if (PC) PC->BackToTitle(); return FReply::Handled(); })
 					[
-						SNew(SButton)
-						.ButtonColorAndOpacity(FLinearColor(0.3f, 0.29f, 0.27f))
-						.OnClicked_Lambda([this]()
-						{
-							if (AMinGameMode* GM = PC ? PC->GetGM() : nullptr) GM->TutorialSkip();
-							return FReply::Handled();
-						})
-						[
-							SNew(STextBlock).Font(Font(12)).ColorAndOpacity(Cream)
-							.Text(FText::FromString(TEXT("Skip tutorial")))
-						]
+						SNew(STextBlock).Font(Font(16)).ColorAndOpacity(Cream)
+						.Text(FText::FromString(TEXT("TITLE")))
 					]
 				]
 			]
@@ -430,6 +428,30 @@ TSharedRef<SWidget> SMinHUD::BuildTutorialPanel()
 void SMinTitle::Construct(const FArguments& InArgs, AMinPlayerController* InPC)
 {
 	PC = InPC;
+
+	auto ModeButton = [this](const TCHAR* Label, const TCHAR* Blurb, EMinGameRules Rules) -> TSharedRef<SWidget>
+	{
+		return SNew(SBox).WidthOverride(320).HeightOverride(64).Padding(0, 4)
+		[
+			SNew(SButton).HAlign(HAlign_Center).VAlign(VAlign_Center)
+			.ButtonColorAndOpacity(Rules == EMinGameRules::SinglePlane ? Accent : AccentWarm)
+			.OnClicked_Lambda([this, Rules]() { if (PC) PC->StartNewRun(Rules); return FReply::Handled(); })
+			[
+				SNew(SVerticalBox)
+				+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center)
+				[
+					SNew(STextBlock).Font(Font(17)).ColorAndOpacity(FLinearColor(0.05f, 0.08f, 0.08f))
+					.Text(FText::FromString(FString::Printf(TEXT("%s   ·   best %d"),
+						Label, ReadHighScore(Rules))))
+				]
+				+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center)
+				[
+					SNew(STextBlock).Font(Font(10, "Regular")).ColorAndOpacity(FLinearColor(0.12f, 0.14f, 0.14f))
+					.Text(FText::FromString(Blurb))
+				]
+			]
+		];
+	};
 
 	ChildSlot
 	[
@@ -461,54 +483,31 @@ void SMinTitle::Construct(const FArguments& InArgs, AMinPlayerController* InPC)
 			+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0, 2, 0, 4)
 			[
 				SNew(STextBlock).Font(Font(18)).ColorAndOpacity(AccentWarm)
-				.Text(FText::FromString(TEXT("MINE  ·  MIND  ·  3D")))
+				.Text(FText::FromString(TEXT("UNDERGROUND LOGISTICS")))
 			]
-			+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0, 0, 0, 30)
+			+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0, 0, 0, 26)
 			[
 				SNew(STextBlock).Font(Font(12, "Regular")).ColorAndOpacity(FLinearColor(0.8f, 0.78f, 0.72f))
-				.Text(FText::FromString(TEXT("a minimalist routing puzzle inside a living underground cube")))
+				.Text(FText::FromString(TEXT("tunnel pools to plants, keep every quota, survive as long as you can")))
 			]
+			+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center)
+			[ ModeButton(TEXT("SINGLE-PLANE"), TEXT("each ore lives on one plane"), EMinGameRules::SinglePlane) ]
+			+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center)
+			[ ModeButton(TEXT("CROSS-PLANE"), TEXT("ores split across planes - use the side view"), EMinGameRules::CrossPlane) ]
 			+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0, 4)
 			[
-				SNew(SBox).WidthOverride(240).HeightOverride(44)
-				[
-					SNew(SButton).HAlign(HAlign_Center).VAlign(VAlign_Center)
-					.ButtonColorAndOpacity(Accent)
-					.OnClicked_Lambda([this]() { if (PC) PC->StartNewGame(); return FReply::Handled(); })
-					[
-						SNew(STextBlock).Font(Font(16)).ColorAndOpacity(FLinearColor(0.05f, 0.08f, 0.08f))
-						.Text(FText::FromString(TEXT("NEW NETWORK")))
-					]
-				]
-			]
-			+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0, 4)
-			[
-				SNew(SBox).WidthOverride(240).HeightOverride(44)
-				[
-					SNew(SButton).HAlign(HAlign_Center).VAlign(VAlign_Center)
-					.ButtonColorAndOpacity(FLinearColor(0.3f, 0.29f, 0.27f))
-					.IsEnabled_Lambda([]() { return UMinSim::SaveExists(); })
-					.OnClicked_Lambda([this]() { if (PC) PC->ContinueGame(); return FReply::Handled(); })
-					[
-						SNew(STextBlock).Font(Font(16)).ColorAndOpacity(Cream)
-						.Text(FText::FromString(TEXT("CONTINUE")))
-					]
-				]
-			]
-			+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0, 4)
-			[
-				SNew(SBox).WidthOverride(240).HeightOverride(44)
+				SNew(SBox).WidthOverride(320).HeightOverride(40)
 				[
 					SNew(SButton).HAlign(HAlign_Center).VAlign(VAlign_Center)
 					.ButtonColorAndOpacity(FLinearColor(0.3f, 0.29f, 0.27f))
 					.OnClicked_Lambda([this]() { if (PC) PC->QuitGame(); return FReply::Handled(); })
 					[
-						SNew(STextBlock).Font(Font(16)).ColorAndOpacity(Cream)
+						SNew(STextBlock).Font(Font(15)).ColorAndOpacity(Cream)
 						.Text(FText::FromString(TEXT("QUIT")))
 					]
 				]
 			]
-			+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0, 34, 0, 0)
+			+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0, 30, 0, 0)
 			[
 				SNew(STextBlock).Font(Font(10, "Regular")).ColorAndOpacity(FLinearColor(0.6f, 0.58f, 0.54f))
 				.Text(FText::FromString(TEXT("terrain, audio and logistics are generated procedurally · BullAxiom 2026")))

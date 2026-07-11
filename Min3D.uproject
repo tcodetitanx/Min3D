@@ -2,7 +2,7 @@
 	"FileVersion": 3,
 	"EngineAssociation": "5.8",
 	"Category": "Game",
-	"Description": "Min3D (Mine + Mind + 3D) - a minimalist mining, logistics and route-optimization puzzle inside a living underground cube.",
+	"Description": "Min3D V2 - a minimalist underground logistics game: tunnel randomly-spawning resource pools to their processing plants across six perpendicular planes, keep every quota, chase the high score.",
 	"Modules": [
 		{
 			"Name": "Min3D",

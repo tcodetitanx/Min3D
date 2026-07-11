@@ -99,6 +99,58 @@ def make_vertex_material():
     unreal.log(f"[bootstrap] created {full}")
 
 
+def make_terrain_material():
+    """Terrain with a screen-space anti-aliased SDF edge: Tex.rgb * Tint ->
+    emissive; smoothstep(0.5 +/- fwidth) on the density stored in Tex.a ->
+    opacity. Curves stay crisp at any zoom level. Unlit translucent."""
+    name = "M_MinTerrain"
+    full = f"{GEN_PATH}/{name}"
+    if asset_lib.does_asset_exist(full):
+        asset_lib.delete_asset(full)
+    mat = asset_tools.create_asset(name, GEN_PATH, unreal.Material, unreal.MaterialFactoryNew())
+
+    tex = mat_lib.create_material_expression(mat, unreal.MaterialExpressionTextureSampleParameter2D, -700, -150)
+    tex.set_editor_property("parameter_name", "Tex")
+    white = unreal.load_asset("/Engine/EngineResources/WhiteSquareTexture")
+    if white:
+        tex.set_editor_property("texture", white)
+
+    tint = mat_lib.create_material_expression(mat, unreal.MaterialExpressionVectorParameter, -700, 120)
+    tint.set_editor_property("parameter_name", "Tint")
+    tint.set_editor_property("default_value", unreal.LinearColor(1, 1, 1, 1))
+
+    opacity = mat_lib.create_material_expression(mat, unreal.MaterialExpressionScalarParameter, -700, 330)
+    opacity.set_editor_property("parameter_name", "Opacity")
+    opacity.set_editor_property("default_value", 1.0)
+
+    mul_rgb = mat_lib.create_material_expression(mat, unreal.MaterialExpressionMultiply, -380, -60)
+    mat_lib.connect_material_expressions(tex, "RGB", mul_rgb, "A")
+    mat_lib.connect_material_expressions(tint, "", mul_rgb, "B")
+
+    sdf = mat_lib.create_material_expression(mat, unreal.MaterialExpressionCustom, -380, 150)
+    sdf.set_editor_property("code",
+        "float w = max(fwidth(d) * 0.75, 0.0025);\n"
+        "return smoothstep(0.5 - w, 0.5 + w, d);")
+    sdf.set_editor_property("output_type", unreal.CustomMaterialOutputType.CMOT_FLOAT1)
+    ci = unreal.CustomInput()
+    ci.set_editor_property("input_name", "d")
+    sdf.set_editor_property("inputs", [ci])
+    mat_lib.connect_material_expressions(tex, "A", sdf, "d")
+
+    mul_a = mat_lib.create_material_expression(mat, unreal.MaterialExpressionMultiply, -180, 250)
+    mat_lib.connect_material_expressions(sdf, "", mul_a, "A")
+    mat_lib.connect_material_expressions(opacity, "", mul_a, "B")
+
+    mat.set_editor_property("shading_model", unreal.MaterialShadingModel.MSM_UNLIT)
+    mat.set_editor_property("blend_mode", unreal.BlendMode.BLEND_TRANSLUCENT)
+    mat.set_editor_property("two_sided", True)
+    mat_lib.connect_material_property(mul_rgb, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+    mat_lib.connect_material_property(mul_a, "", unreal.MaterialProperty.MP_OPACITY)
+    mat_lib.recompile_material(mat)
+    asset_lib.save_loaded_asset(mat)
+    unreal.log(f"[bootstrap] created {full}")
+
+
 def make_main_map():
     full = f"{MAPS_PATH}/Main"
     les = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
@@ -114,6 +166,7 @@ ensure_dir(GEN_PATH)
 ensure_dir(MAPS_PATH)
 make_sprite_material()
 make_vertex_material()
+make_terrain_material()
 make_main_map()
 asset_lib.save_directory("/Game", recursive=True)
 unreal.log("[bootstrap] done")

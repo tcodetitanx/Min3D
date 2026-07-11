@@ -24,23 +24,21 @@ public:
 	virtual void BeginPlay() override;
 
 	void SwitchPlane(int32 Delta);
-	void JumpToPlane(int32 Plane);
+	void JumpToPlane(int32 PlaneInView); // 0..2 within the current orientation
+	void ToggleSideView();               // the perspective shift
 	void ToggleMatrix();
 	void SetTool(EMinTool InTool);
-	void StartNewGame();
-	void ContinueGame();
+
+	// run lifecycle
+	void StartNewRun(EMinGameRules Rules); // from the title screen
+	void RestartRun();                     // after game over: fresh seed, same rules
+	void BackToTitle();
 	void QuitGame();
-	void SaveNow();
 
 	bool GetMouseCell(FIntPoint& OutCell) const;
 
 	EMinTool Tool = EMinTool::None;
 	bool bInTitle = true;
-
-	// lift placement state
-	bool bLiftPending = false;
-	FIntPoint LiftBaseCell = FIntPoint::ZeroValue;
-	int32 LiftBasePlane = 0;
 
 	// live status line for the HUD (cost previews, hints)
 	FString StatusLine;
@@ -62,15 +60,13 @@ private:
 	void OnRMBDown();
 	void OnTogglePause();
 	void OnSpeed();
-	void OnToggleGhosts();
-	void OnSave();
-	void OnLoad();
 	void OnEscape();
 	void UpdateDragPath();
 	void UpdatePreview();
 	void ShowToast(const FString& Msg);
 
 	bool bDraggingRoute = false;
+	bool bErasing = false;
 	TArray<FIntPoint> DragPath;
 	int32 DragPlane = 0;
 

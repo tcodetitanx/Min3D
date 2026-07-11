@@ -17,8 +17,9 @@ struct FMinBuildCheck
 	FString Reason;
 };
 
-// The whole logistics simulation: route graph, structures, carts, power,
-// processing, contracts. Owned and ticked by AMinGameMode.
+// The V2 game loop: a cell-based tunnel network, randomly spawning resource
+// pools and processing plants, color-matched cart round trips, demand pins
+// with an overflow fail timer, and a per-mode high score.
 UCLASS()
 class UMinSim : public UObject
 {
@@ -26,82 +27,84 @@ class UMinSim : public UObject
 
 public:
 	void Init(UMinWorld* InWorld, UMinAssets* InAssets, AMinGameMode* InGM);
+	void StartRun(EMinGameRules InRules);
 	void Tick(float Dt);
 
-	// ---- graph / build API -------------------------------------------------
-	FMinBuildCheck CheckRoute(const TArray<FIntPoint>& Cells, int32 Plane, EMinRoute Type) const;
-	bool BuildRoute(const TArray<FIntPoint>& Cells, int32 Plane, EMinRoute Type);
-	FMinBuildCheck CheckStructure(EMinStructure Type, const FIntPoint& Cell, int32 Plane) const;
-	bool BuildStructure(EMinStructure Type, const FIntPoint& Cell, int32 Plane);
-	FMinBuildCheck CheckLift(const FIntPoint& Cell, int32 PlaneA, int32 PlaneB) const;
-	bool BuildLift(const FIntPoint& Cell, int32 PlaneA, int32 PlaneB);
-	bool RemoveAt(const FIntPoint& Cell, int32 Plane);
+	// ---- build / erase API ---------------------------------------------------
+	FMinBuildCheck CheckRoute(const TArray<FIntPoint>& UVCells, int32 Plane) const;
+	bool BuildRoute(const TArray<FIntPoint>& UVCells, int32 Plane);
+	bool EraseAt(const FIntPoint& UV, int32 Plane); // removes one route section
 
-	static int32 StructureCost(EMinStructure Type);
-	static const TCHAR* StructureName(EMinStructure Type);
-	static const TCHAR* StructureSprite(EMinStructure Type);
+	// route network: plain cells; the graph is implicit
+	TSet<FIntVector> RouteCells;
+	bool IsWalkable(const FIntVector& C) const;
 
-	// the surface headquarters every supply chain ultimately feeds
-	void EnsureBase();
-	int32 BaseStructId = -1;
-	FIntVector BaseCell() const;
-
-	// ---- state -------------------------------------------------------------
-	TArray<FMinNode> Nodes;
-	TArray<FMinEdge> Edges;
-	TArray<FMinStructureInst> Structures;
+	// ---- state ----------------------------------------------------------------
+	TArray<FMinPool> Pools;
+	TArray<FMinPlant> Plants;
 	TArray<FMinCart> Carts;
-	TMap<FIntVector, int32> NodeAtCell;   // junction/endpoint lookup
-	TMap<FIntVector, int32> EdgeAtCell;   // interior route cells -> edge id
+	FIntVector DepotCell = FIntVector(-1, -1, -1);
 
-	int32 Credits = 350;
-	TMap<EMinResource, int32> Stock;
-	TArray<FMinContract> Contracts;
-	int32 ActiveContract = 0;
+	EMinGameRules Rules = EMinGameRules::SinglePlane;
+	bool bRunStarted = false;
+	bool bGameOver = false;
+	bool bNewRecord = false;
+	int32 Score = 0;
+	int32 HighScore = 0;
+	int32 SegmentsLeft = 30;
+	int32 ColorsActive = 0;
 	float PlayTime = 0.f;
-	int32 TotalDeliveries = 0;
 	float SimSpeed = 1.f;
 	bool bPaused = false;
-
-	// stats for diagnostics
-	int32 CartsInFlight() const;
-	float AvgCongestion() const;
 	FString CurrentWarning;
+	FString GameOverReason;
 
-	// dirty flag: plane actors rebuild route meshes when set
+	int32 CartsInFlight() const;
+
+	// dirty flags: plane actors rebuild meshes when set
 	bool bTopologyDirty = false;
 	bool bStructuresDirty = false;
 
 	DECLARE_MULTICAST_DELEGATE_OneParam(FOnMinEvent, const FString&);
 	FOnMinEvent OnEvent; // toast messages for the HUD
 
-	// save / load
-	bool SaveGame(const FString& SlotName = TEXT("min3d_save")) const;
-	bool LoadGame(const FString& SlotName = TEXT("min3d_save"));
-	static bool SaveExists(const FString& SlotName = TEXT("min3d_save"));
-
 	UMinAudio* Audio = nullptr;
+
+	static constexpr int32 PinCap = 8;        // pins at/over this start the fail timer
+	static constexpr float OverflowMax = 30.f;
+	static constexpr int32 MaxPoolCarts = 2;
 
 private:
 	UPROPERTY() TObjectPtr<UMinWorld> World;
 	UPROPERTY() TObjectPtr<UMinAssets> Assets;
 	UPROPERTY() TObjectPtr<AMinGameMode> GM;
 
-	int32 EnsureNodeAt(const FIntVector& Cell, EMinRoute SplitType);
-	int32 SplitEdgeAt(int32 EdgeId, const FIntVector& Cell);
-	void RemoveEdge(int32 EdgeId);
-	void RemoveStructure(int32 StructId);
-	bool FindPath(int32 StartNode, int32 EndNode, bool bFluid, TArray<int32>& OutEdges, TArray<int32>& OutNodes, float* OutCost = nullptr) const;
-	int32 PickDestination(const FMinStructureInst& Source, EMinResource Cargo, TArray<int32>& OutEdges, TArray<int32>& OutNodes);
-	bool StructureAcceptsCargo(const FMinStructureInst& S, EMinResource Cargo) const;
-	void DeliverCargo(FMinCart& Cart);
-	void DispatchFrom(FMinStructureInst& S, EMinResource Cargo, int32 Amount);
-	void UpdatePower();
-	void TickStructures(float Dt);
+	FRandomStream Rng;
+	float Difficulty01() const;
+
+	// spawning
+	void PlaceDepot();
+	void ActivateColor(int32 ColorIdx);
+	int32 PlaneForSpawn(int32 ColorIdx, bool bPlant, int32 AvoidPlane = -1);
+	bool PickSpawnCell(int32 Plane, int32 MinDist, FIntVector& Out, const FIntVector* Near = nullptr);
+	bool SpawnPool(EMinResource Res, int32 Plane, const FIntVector* Near = nullptr);
+	bool SpawnPlant(EMinResource Res, int32 Plane);
+	void TickSpawner(float Dt);
+	float PoolSpawnT = 0.f, PlantSpawnT = 0.f, SegmentDropT = 0.f, DispatchT = 0.f;
+
+	// logistics
+	bool FindNearest(const FIntVector& From, TFunctionRef<bool(const FIntVector&)> IsGoal,
+		TArray<FIntVector>& OutPath) const;
+	void Dispatch();
 	void TickCarts(float Dt);
-	void TickContracts();
-	void SetupContracts();
-	float EdgeSpeedMult(const FMinEdge& E) const;
+	void TickPlants(float Dt);
+	void TickPools(float Dt);
+	void KillCart(FMinCart& Cart);
+	void TriggerGameOver(const FMinPlant& Plant);
+
+	// high scores (per rules mode)
+	void LoadHighScore();
+	void SaveHighScore();
+
 	int32 NextCartId = 1;
-	float PowerTimer = 0.f;
 };

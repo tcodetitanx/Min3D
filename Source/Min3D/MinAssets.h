@@ -32,6 +32,8 @@ public:
 		FLinearColor Tint = FLinearColor::White, float Opacity = 1.f);
 	UMaterial* GetVertexMaterial() const { return VertexMat; }
 	UMaterial* GetSpriteMaterial() const { return SpriteMat; }
+	// SDF-edge terrain material (falls back to the sprite material if missing)
+	UMaterial* GetTerrainMaterial() const { return TerrainMat ? TerrainMat.Get() : SpriteMat.Get(); }
 
 	// convenience: configured no-collision quad component showing a sprite.
 	// SizeUU = desired height in uu; width follows source aspect.
@@ -45,6 +47,7 @@ private:
 	UPROPERTY() TObjectPtr<UStaticMesh> QuadMesh;
 	UPROPERTY() TObjectPtr<UMaterial> SpriteMat;
 	UPROPERTY() TObjectPtr<UMaterial> VertexMat;
+	UPROPERTY() TObjectPtr<UMaterial> TerrainMat;
 	TMap<FString, FVector2D> SpriteSizes; // from manifest
 	FString SpriteDir;
 	void LoadManifest();
